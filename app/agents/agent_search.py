@@ -5,13 +5,23 @@ non-json format.
 
 import re
 from collections.abc import Generator
+from pathlib import Path
 
 from loguru import logger
 
 from app import config
 from app.data_structures import MessageThread
+from app.infrastructure.shared_memory import SharedMemoryStore
+from app.knowledge.semantic_injection import (
+    build_search_final_round_checklist,
+    build_semantic_context_ver1,
+    build_sibling_scan_prompt,
+    detect_module_families,
+)
+from app.knowledge.ver1 import ACR_LOG_PREFIX
 from app.log import print_acr, print_retrieval
 from app.model import common, ollama
+from app.task import Task
 
 SYSTEM_PROMPT = """You are a software developer maintaining a large project.
 You are working on an issue submitted to your project.
@@ -50,101 +60,153 @@ ANALYZE_PROMPT = (
 
 ANALYZE_AND_SELECT_PROMPT = (
     "Based on your analysis, answer below questions:\n"
-    "1. do we need more context: construct search API calls to get more context of the project. If you don't need more context, LEAVE THIS EMTPY.\n"
-    "2. where are bug locations: buggy files, classes, and methods. "
-    "Only include the necessary locations that need to be fixed. "
-    "For each bug location, you should also describe the intended behavior of the code at that location, "
-    "in order to resolve the issue. "
-    "The intended behavior should preserve the existing functionality of the code. "
-    "If you think two methods in the same class are buggy, you should provide two bug locations (E.g. Location 1: File: a.py, Class: A, Method: a. Location 2: File: a.py, Class: A, Method: b.). "
-    "If you want to add a method to a class, you should only provide the file and class as bug location, "
-    "and describe the new method in intended behavior. "
-    "If you still need more context, LEAVE THIS EMPTY."
+    "1. do we need more context: construct search API calls to get more context of the project. "
+    "If you don't need more context, LEAVE THIS EMPTY.\n"
+    "2. bug_locations:\n"
+    "   - One entry per needs_fix=yes row ONLY (from sibling scan decision tree).\n"
+    "   - Each intended_behavior MUST satisfy LOCALIZATION_INTENDED_BEHAVIOR_CONTRACT.\n"
+    "   - Include spec_source, spec_rationale per location; neighbor_reference when using neighbor_contract.\n"
+    "   - If any needs_fix=yes, bug_locations MUST NOT be empty.\n"
+    "   - If more context needed: API_calls non-empty, bug_locations EMPTY.\n"
+    "   - For each location: file, class, method, intended_behavior, spec_source, spec_rationale, "
+    "and neighbor_reference/neighbor_eligibility when applicable."
 )
 
 
-# TODO: move this to some util class, since other agents may need it as well
 def prepare_issue_prompt(problem_stmt: str) -> str:
-    """
-    Given the raw problem statement, sanitize it and prepare the issue prompt.
-    Args:
-        problem_stmt (str): The raw problem statement.
-            Assumption: the problem statement is the content of a markdown file.
-    Returns:
-        str: The issue prompt.
-    """
-    # remove markdown comments
     problem_wo_comments = re.sub(r"<!--.*?-->", "", problem_stmt, flags=re.DOTALL)
     content_lines = problem_wo_comments.split("\n")
-    # remove spaces and empty lines
     content_lines = [x.strip() for x in content_lines]
     content_lines = [x for x in content_lines if x != ""]
     problem_stripped = "\n".join(content_lines)
-    # add tags
-    result = "<issue>" + problem_stripped + "\n</issue>"
-    return result
+    return "<issue>" + problem_stripped + "\n</issue>"
+
+
+def _run_analyze_and_select(
+    msg_thread: MessageThread,
+    task: Task | None,
+    task_dir: str | None,
+) -> tuple[str, str]:
+    """Steps ③ and ④: analyze+select then dedicated sibling scan."""
+    analyze_and_select_prompt = ANALYZE_AND_SELECT_PROMPT
+    if isinstance(common.SELECTED_MODEL, ollama.OllamaModel):
+        analyze_and_select_prompt += (
+            "\n\nNOTE: If you have already identified the bug locations, "
+            "do not make any search API calls."
+        )
+
+    if task is not None and config.enable_sympy_pipeline_v2:
+        families = detect_module_families([], task.get_issue_statement())
+        checklist = build_search_final_round_checklist(
+            task, module_families_detected=families
+        )
+        if checklist:
+            msg_thread.add_user(checklist)
+            print_acr(checklist, "final localization checklist")
+
+    msg_thread.add_user(analyze_and_select_prompt)
+    print_acr(analyze_and_select_prompt, "context retrieval analyze and select prompt")
+
+    logger.debug("<Agent search> Analyze and select (step 3).")
+    res_text, *_ = common.SELECTED_MODEL.call(msg_thread.to_msg())
+    msg_thread.add_model(res_text)
+    print_retrieval(res_text, "Model response (analyze and select)")
+
+    sibling_scan_text = ""
+    if config.enable_sympy_pipeline_v2:
+        sibling_prompt = build_sibling_scan_prompt()
+        msg_thread.add_user(sibling_prompt)
+        print_acr(sibling_prompt, "sibling scan prompt (step 4)")
+        logger.debug("<Agent search> Sibling scan dedicated call (step 4).")
+        sibling_scan_text, *_ = common.SELECTED_MODEL.call(msg_thread.to_msg())
+        msg_thread.add_model(sibling_scan_text)
+        print_retrieval(sibling_scan_text, "Model response (sibling scan)")
+
+    combined = res_text
+    if sibling_scan_text:
+        combined += "\n\n--- SIBLING_SCAN ---\n" + sibling_scan_text
+    return res_text, combined
 
 
 def generator(
-    issue_stmt: str, sbfl_result: str, reproducer_result: str
-) -> Generator[tuple[str, MessageThread], tuple[str, bool] | None, None]:
-    """
-    Args:
-        - issue_stmt: problem statement
-        - sbfl_result: result after running sbfl
-    """
-
+    issue_stmt: str,
+    sbfl_result: str,
+    reproducer_result: str,
+    task: Task | None = None,
+    task_dir: str | None = None,
+) -> Generator[tuple[str, MessageThread], tuple[str, bool | str] | None, None]:
     msg_thread = MessageThread()
     msg_thread.add_system(SYSTEM_PROMPT)
 
     issue_prompt = prepare_issue_prompt(issue_stmt)
     msg_thread.add_user(issue_prompt)
 
+    if task is not None:
+        semantic_context = build_semantic_context_ver1(
+            task, phase="search", task_dir=task_dir
+        )
+        if semantic_context:
+            msg_thread.add_user(semantic_context)
+            logger.info("{} semantic rules injected (search)", ACR_LOG_PREFIX)
+
     if config.enable_sbfl:
-        sbfl_prompt = "An external analysis tool has been deployed to identify the suspicious code to be fixed. You can choose to use the results from this tool, if you think they are useful."
+        sbfl_prompt = (
+            "An external analysis tool has been deployed to identify the suspicious code "
+            "to be fixed. You can choose to use the results from this tool, if you think they are useful."
+        )
         sbfl_prompt += "The tool output is as follows:\n"
         sbfl_prompt += sbfl_result
         msg_thread.add_user(sbfl_prompt)
 
     if config.reproduce_and_review and reproducer_result:
-        reproducer_prompt = "An external analysis tool has been deployed to construct tests that reproduce the issue. You can choose to use the results from this tool, if you think they are useful."
+        reproducer_prompt = (
+            "An external analysis tool has been deployed to construct tests that reproduce "
+            "the issue. You can choose to use the results from this tool, if you think they are useful."
+        )
         reproducer_prompt += "The tool output is as follows:\n"
         reproducer_prompt += reproducer_result
         msg_thread.add_user(reproducer_prompt)
 
-    msg_thread.add_user(SELECT_PROMPT)
+    if config.enable_spec_parser and task_dir:
+        swm = SharedMemoryStore.read(Path(task_dir).parent)
+        if swm is None:
+            swm = SharedMemoryStore.read(task_dir)
+        if swm is not None:
+            repair_contract = SharedMemoryStore.to_search_context(swm)
+            msg_thread.add_user(
+                "=== Repair Contract from Specification Parser (authoritative over Issue draft) ===\n"
+                + repair_contract
+            )
+            logger.info("{} injected repair contract from SWM", ACR_LOG_PREFIX)
 
+    msg_thread.add_user(SELECT_PROMPT)
     print_acr(SELECT_PROMPT, "context retrieval initial prompt")
 
-    # TODO: figure out what should be printed to console here
-    # print_acr(prompt, f"context retrieval round {start_round_no}")
+    localization_rewrite_pending = False
 
     while True:
+        if not localization_rewrite_pending:
+            logger.debug("<Agent search> Selecting APIs to call.")
+            res_text, *_ = common.SELECTED_MODEL.call(msg_thread.to_msg())
+            msg_thread.add_model(res_text)
+            print_retrieval(res_text, "Model response (API selection)")
 
-        # first call is to select some APIs to call
-        logger.debug("<Agent search> Selecting APIs to call.")
-        res_text, *_ = common.SELECTED_MODEL.call(msg_thread.to_msg())
-        msg_thread.add_model(res_text)
-        # TODO: print the response
-        print_retrieval(res_text, "Model response (API selection)")
+            generator_input = yield res_text, msg_thread
+            assert generator_input is not None
+            search_result, re_search = generator_input
 
-        # the search result should be sent here by our backend AST search tool
-        generator_input = yield res_text, msg_thread
-        assert generator_input is not None
-        search_result, re_search = generator_input
+            if re_search is True:
+                logger.debug(
+                    "<Agent search> Downstream could not consume our last response. Will retry."
+                )
+                msg_thread.add_user(search_result)
+                continue
 
-        if re_search:
-            # the search APIs selected have some issue
-            logger.debug(
-                "<Agent search> Downstream could not consume our last response. Will retry."
-            )
+            logger.debug("<Agent search> Analyzing search results.")
             msg_thread.add_user(search_result)
-            continue
+        else:
+            localization_rewrite_pending = False
 
-        # the search APIs selected are ok and the results are back
-        # second call is to analyze the search results
-        logger.debug("<Agent search> Analyzing search results.")
-        msg_thread.add_user(search_result)
         msg_thread.add_user(ANALYZE_PROMPT)
         print_acr(ANALYZE_PROMPT, "context retrieval analyze prompt")
 
@@ -152,12 +214,21 @@ def generator(
         msg_thread.add_model(res_text)
         print_retrieval(res_text, "Model response (context analysis)")
 
-        analyze_and_select_prompt = ANALYZE_AND_SELECT_PROMPT
-        if isinstance(common.SELECTED_MODEL, ollama.OllamaModel):
-            # llama models tend to always output search APIs and buggy locations.
-            analyze_and_select_prompt += "\n\nNOTE: If you have already identified the bug locations, do not make any search API calls."
+        _, combined_response = _run_analyze_and_select(msg_thread, task, task_dir)
 
-        msg_thread.add_user(analyze_and_select_prompt)
-        print_acr(
-            analyze_and_select_prompt, "context retrieval analyze and select prompt"
-        )
+        generator_input = yield combined_response, msg_thread
+        assert generator_input is not None
+        search_result, re_search = generator_input
+
+        if re_search is True:
+            logger.debug(
+                "<Agent search> Downstream could not consume analyze/select response. Will retry."
+            )
+            msg_thread.add_user(search_result)
+            continue
+
+        if re_search == "localization_rewrite":
+            logger.debug("<Agent search> Localization rewrite requested.")
+            msg_thread.add_user(search_result)
+            localization_rewrite_pending = True
+            continue

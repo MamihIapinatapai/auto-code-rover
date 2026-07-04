@@ -19,9 +19,12 @@ from app.api import validation
 from app.api.review_manage import ReviewManager
 from app.api.validation import evaluate_patch
 from app.data_structures import BugLocation
+from app.infrastructure.shared_memory import SharedMemoryStore
+from app.knowledge.ver1 import ACR_LOG_PREFIX, acr_version_metadata
 from app.log import print_banner, print_issue
 from app.manage import ProjectApiManager
 from app.model.common import set_model
+from app.spec_parser.agent import SpecParsingAgent
 from app.task import Task
 
 
@@ -116,6 +119,12 @@ def run_one_task(task: Task, output_dir: str, model_names: Iterable[str]) -> boo
         out_dir = Path(output_dir, f"output_{idx}")
 
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        if config.enable_semantic_injection_ver1:
+            Path(out_dir, "acr_version.json").write_text(
+                json.dumps(acr_version_metadata(), indent=2)
+            )
+            logger.info("{} wrote acr_version.json to {}", ACR_LOG_PREFIX, out_dir)
 
         # meta.json is used later by convert_response_to_diff(),
         # so it needs to be copied over
@@ -266,33 +275,75 @@ def _run_one_task(
     print_banner("Starting AutoCodeRover on the following issue")
     print_issue(problem_stmt)
 
+    structured_spec = None
+    if config.enable_spec_parser:
+        logger.info("Running specification parsing agent (module 1)")
+        spec_agent = SpecParsingAgent(api_manager.task, output_dir)
+        structured_spec = spec_agent.run(problem_stmt)
+        if config.spec_parser_only:
+            logger.info("spec_parser_only=True; skipping search/patch")
+            return True
+
     test_agent = TestAgent(api_manager.task, output_dir)
 
     repro_result_map = {}
     repro_stderr = ""
     reproduced = False
     reproduced_test_content = None
-    try:
-        test_handle, test_content, orig_repro_result = (
-            test_agent.write_reproducing_test_without_feedback()
-        )
-        test_agent.save_test(test_handle)
 
-        coord = (PatchAgent.EMPTY_PATCH_HANDLE, test_handle)
-        repro_result_map[coord] = orig_repro_result
+    skip_legacy = (
+        config.enable_spec_parser
+        and config.spec_parser_skip_legacy_reproducer
+        and structured_spec is not None
+        and structured_spec.repro_script is not None
+        and structured_spec.repro_script.calibration_passed
+    )
 
-        if orig_repro_result.reproduced:
-            repro_stderr = orig_repro_result.stderr
-            reproduced = True
-            reproduced_test_content = test_content
-        # TODO: utilize the test for localization
-    except NoReproductionStep:
-        logger.info(
-            "Test agent decides that the issue statement does not contain "
-            "reproduction steps; skipping reproducer tracing"
+    if skip_legacy:
+        swm = SharedMemoryStore.read(output_dir)
+        repro_stderr = (
+            SharedMemoryStore.to_search_context(swm)
+            if swm
+            else structured_spec.repro_script.stderr_excerpt  # type: ignore[union-attr]
         )
-    except InvalidLLMResponse:
-        logger.warning("Failed to write a reproducer test; skipping reproducer tracing")
+        reproduced = True
+        reproduced_test_content = structured_spec.repro_script.content  # type: ignore[union-attr]
+        logger.info("Using spec parser calibrated script; skipping legacy TestAgent")
+    else:
+        try:
+            test_handle, test_content, orig_repro_result = (
+                test_agent.write_reproducing_test_without_feedback()
+            )
+            test_agent.save_test(test_handle)
+
+            coord = (PatchAgent.EMPTY_PATCH_HANDLE, test_handle)
+            repro_result_map[coord] = orig_repro_result
+
+            if orig_repro_result.reproduced:
+                repro_stderr = orig_repro_result.stderr
+                reproduced = True
+                reproduced_test_content = test_content
+            # TODO: utilize the test for localization
+        except NoReproductionStep:
+            logger.info(
+                "Test agent decides that the issue statement does not contain "
+                "reproduction steps; skipping reproducer tracing"
+            )
+        except InvalidLLMResponse:
+            logger.warning(
+                "Failed to write a reproducer test; skipping reproducer tracing"
+            )
+
+    if config.enable_spec_parser and not skip_legacy:
+        swm = SharedMemoryStore.read(output_dir)
+        if swm:
+            spec_context = SharedMemoryStore.to_search_context(swm)
+            if spec_context:
+                repro_stderr = (
+                    spec_context
+                    if not repro_stderr
+                    else repro_stderr + "\n\n" + spec_context
+                )
 
     if config.enable_sbfl:
         sbfl_result, *_ = api_manager.fault_localization()

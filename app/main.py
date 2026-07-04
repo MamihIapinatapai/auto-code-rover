@@ -4,6 +4,7 @@ The main driver.
 
 import json
 import logging
+import os
 import platform
 import shutil
 from argparse import ArgumentParser
@@ -96,10 +97,35 @@ def main():
     config.conv_round_limit = args.conv_round_limit
     config.enable_sbfl = args.enable_sbfl
     config.enable_validation = args.enable_validation
+    config.enable_text_only_search = args.enable_text_only_search
     config.enable_angelic = args.enable_angelic
     config.enable_perfect_angelic = args.enable_perfect_angelic
     config.only_save_sbfl_result = args.save_sbfl_result
     config.only_reproduce = args.reproduce
+
+    if getattr(args, "enable_semantic_injection_ver1", False):
+        config.enable_semantic_injection_ver1 = True
+    if os.environ.get("ACR_SEMANTIC_INJECTION_VER1", "").lower() in ("1", "true", "yes"):
+        config.enable_semantic_injection_ver1 = True
+    if os.environ.get("ACR_SYMPY_PIPELINE_V2", "").lower() in ("0", "false", "no"):
+        config.enable_sympy_pipeline_v2 = False
+    if getattr(args, "enable_spec_parser", False):
+        config.enable_spec_parser = True
+    if os.environ.get("ACR_SPEC_PARSER", "").lower() in ("1", "true", "yes"):
+        config.enable_spec_parser = True
+    if getattr(args, "spec_parser_only", False):
+        config.spec_parser_only = True
+        config.enable_spec_parser = True
+    if getattr(args, "spec_parser_skip_legacy_reproducer", False):
+        config.spec_parser_skip_legacy_reproducer = True
+    if getattr(args, "spec_parser_scope_llm", False):
+        config.spec_parser_scope_llm = True
+    if os.environ.get("ACR_SPEC_PARSER_SCOPE_LLM", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        config.spec_parser_scope_llm = True
 
     subcommand = getattr(args, subparser_dest_attr_name)
     if subcommand == "swe-bench":
@@ -238,10 +264,9 @@ def add_task_related_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--model",
         type=str,
-        choices=list(common.MODEL_HUB.keys()),
         nargs="+",
         action="append",
-        help="The model to use. Currently only OpenAI models are supported.",
+        help="The model to use (registered models or litellm-generic-<name>).",
     )
     parser.add_argument(
         "--model-temperature",
@@ -265,10 +290,22 @@ def add_task_related_args(parser: ArgumentParser) -> None:
         "--enable-sbfl", action="store_true", default=False, help="Enable SBFL."
     )
     parser.add_argument(
+        "--enable-text-only-search",
+        action="store_true",
+        default=False,
+        help="Only expose search_code APIs (E1 ablation).",
+    )
+    parser.add_argument(
         "--enable-validation",
         action="store_true",
         default=False,
         help="Enable validation in our workflow.",
+    )
+    parser.add_argument(
+        "--enable-semantic-injection-ver1",
+        action="store_true",
+        default=False,
+        help="Enable ver1 SymPy semantic rule injection in search/patch agents.",
     )
     parser.add_argument(
         "--enable-angelic",
@@ -293,6 +330,30 @@ def add_task_related_args(parser: ArgumentParser) -> None:
         action="store_true",
         default=False,
         help="Special mode to only generate reproducer tests",
+    )
+    parser.add_argument(
+        "--enable-spec-parser",
+        action="store_true",
+        default=False,
+        help="Enable specification parsing agent before search.",
+    )
+    parser.add_argument(
+        "--spec-parser-only",
+        action="store_true",
+        default=False,
+        help="Run only spec parser and exit (no search/patch).",
+    )
+    parser.add_argument(
+        "--spec-parser-skip-legacy-reproducer",
+        action="store_true",
+        default=False,
+        help="Skip TestAgent reproducer when spec parser calibration passes.",
+    )
+    parser.add_argument(
+        "--spec-parser-scope-llm",
+        action="store_true",
+        default=False,
+        help="Enable optional ScopePlan LLM for P2 analysis scope (default: deterministic).",
     )
     parser.add_argument(
         "--num-processes",
@@ -459,7 +520,8 @@ def run_task_group(task_group_id: str, task_group_items: list[RawTask]) -> None:
 
 def run_task_in_subprocess(task: RawTask) -> None:
     with ProcessPoolExecutor(max_workers=1) as executor:
-        executor.submit(run_raw_task, task)
+        future = executor.submit(run_raw_task, task)
+        future.result()
 
 
 def run_raw_task(task: RawTask) -> bool:
@@ -571,6 +633,8 @@ def do_inference(python_task: Task, task_output_dir: str) -> bool:
     )
 
     start_time = datetime.now()
+    run_ok = False
+    write_cost = False
 
     python_task.setup_project()
 
@@ -584,8 +648,7 @@ def do_inference(python_task: Task, task_output_dir: str) -> bool:
             _, _, run_ok = api_manager.reproduce()
 
         else:
-            # normal mode - actually running the task
-
+            write_cost = True
             try:
                 run_ok = inference.run_one_task(
                     python_task, task_output_dir, config.models
@@ -596,11 +659,8 @@ def do_inference(python_task: Task, task_output_dir: str) -> bool:
                     "Content policy violation. Retry with backup model."
                 )
 
-                # retry with backup model
                 python_task.setup_project()
 
-                # remove everything other than the info.log file, and
-                # also some meta data file dumped by RawTask
                 log.log_and_always_print(
                     "Removing all files except info.log and meta files."
                 )
@@ -619,11 +679,11 @@ def do_inference(python_task: Task, task_output_dir: str) -> bool:
                 run_ok = inference.run_one_task(
                     python_task, task_output_dir, config.backup_model
                 )
-
+    finally:
+        if write_cost:
             end_time = datetime.now()
             with apputils.cd(python_task.project_path):
                 dump_cost(start_time, end_time, task_output_dir)
-    finally:
         python_task.reset_project()
 
     return run_ok
