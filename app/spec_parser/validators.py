@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from app.spec_parser.ac_markers import ac_ids_in_script, parse_ac_sections
 from app.spec_parser.schema import (
     CriterionResult,
     ExecutionEvidence,
@@ -25,9 +26,7 @@ def validate_structured_spec_semantics(
 
 
 def _ac_ids_in_script(script: str) -> set[str]:
-    return set(
-        re.findall(r"---\s*(AC-[A-Z0-9]+)(?:\s*:|\s*---|\s|$)", script, re.IGNORECASE)
-    )
+    return ac_ids_in_script(script)
 
 
 def validate_ac_calibration(
@@ -160,7 +159,9 @@ def build_execution_evidence_from_result(
             overall_exit_code=result.exit_code,
         )
 
-    ac_ids = sorted(_ac_ids_in_script(script_content)) or [
+    ac_ids = sorted(parse_ac_sections(script_content, [
+        ac.id for ac in spec.acceptance_criteria if ac.priority == "must"
+    ]).ac_ids) or [
         ac.id for ac in spec.acceptance_criteria if ac.priority == "must"
     ]
     per_criterion: list[CriterionResult] = []
