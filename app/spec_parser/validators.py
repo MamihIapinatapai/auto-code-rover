@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import re
 
+from app import config
 from app.spec_parser.ac_markers import ac_ids_in_script, parse_ac_sections
+from app.spec_parser.calibration_gate import (
+    CalibrationVerdict,
+    evaluate_calibration,
+    strict_legacy_ok,
+)
 from app.spec_parser.schema import (
     CriterionResult,
     ExecutionEvidence,
     FailureAnchor,
     SandboxExecutionResult,
+    ScriptLintReport,
     StructuredSpecification,
     TaskType,
 )
@@ -33,67 +40,16 @@ def validate_ac_calibration(
     spec: StructuredSpecification,
     evidence: ExecutionEvidence,
     script_content: str,
+    lint_report: ScriptLintReport | None = None,
 ) -> tuple[bool, str, list[str], list[str]]:
     """Return passed, feedback, failed_ac_ids, uncovered_co_fix."""
-    if evidence.calibration_error:
-        return (
-            False,
-            f"calibration_error: {evidence.calibration_error}",
-            [],
-            list(spec.fix_scope.co_fix_required),
-        )
-
-    must_ids = [ac.id for ac in spec.acceptance_criteria if ac.priority == "must"]
-    script_acs = _ac_ids_in_script(script_content)
-    missing_in_script = [aid for aid in must_ids if aid not in script_acs]
-
-    uncovered_co_fix: list[str] = []
-    for entity in spec.fix_scope.co_fix_required:
-        if entity.lower() not in script_content.lower():
-            uncovered_co_fix.append(entity)
-
-    failed_ac: list[str] = []
-    for cr in evidence.per_criterion_results:
-        if cr.criterion_id in must_ids:
-            if cr.expected_failure and cr.passed_on_buggy_code:
-                failed_ac.append(cr.criterion_id)
-
-    if missing_in_script:
-        return (
-            False,
-            f"missing AC sections in script: {missing_in_script}",
-            missing_in_script,
-            uncovered_co_fix,
-        )
-
-    if uncovered_co_fix:
-        return (
-            False,
-            f"script does not cover co_fix_required: {uncovered_co_fix}",
-            failed_ac,
-            uncovered_co_fix,
-        )
-
-    if failed_ac:
-        return (
-            False,
-            f"ACs did not fail as expected on buggy code: {failed_ac}",
-            failed_ac,
-            uncovered_co_fix,
-        )
-
-    if (
-        evidence.calibration_passed
-        and not missing_in_script
-        and not uncovered_co_fix
-        and not evidence.calibration_error
-    ):
-        return True, "", [], []
-
-    if not evidence.calibration_passed:
-        return False, "calibration_passed is false", failed_ac, uncovered_co_fix
-
-    return True, "", [], []
+    verdict = evaluate_calibration(spec, evidence, script_content, lint_report)
+    return (
+        verdict.passed,
+        verdict.reason,
+        verdict.failed_ac_ids,
+        verdict.uncovered_co_fix,
+    )
 
 
 def validate_calibration_legacy(
@@ -101,16 +57,7 @@ def validate_calibration_legacy(
     spec: StructuredSpecification,
     result: SandboxExecutionResult,
 ) -> tuple[bool, str]:
-    stderr = result.stderr
-    if "ImportError" in stderr or "SyntaxError" in stderr:
-        return False, "ImportError or SyntaxError in script"
-    if task_type == TaskType.BUG_FIX:
-        if result.exit_code == 0:
-            return False, "BUG_FIX script should fail on buggy codebase"
-        if "AssertionError" not in stderr and "Error" not in stderr:
-            return False, "Expected AssertionError or exception in stderr"
-        return True, ""
-    return result.exit_code != 0, "FEATURE script should fail when missing"
+    return strict_legacy_ok(task_type, result, "")
 
 
 def extract_failure_anchor(
@@ -151,19 +98,19 @@ def build_execution_evidence_from_result(
             calibration_passed=False,
             calibration_error="ImportError",
             overall_exit_code=result.exit_code,
+            execution_mode="holistic",
         )
     if "SyntaxError" in stderr:
         return ExecutionEvidence(
             calibration_passed=False,
             calibration_error="SyntaxError",
             overall_exit_code=result.exit_code,
+            execution_mode="holistic",
         )
 
-    ac_ids = sorted(parse_ac_sections(script_content, [
-        ac.id for ac in spec.acceptance_criteria if ac.priority == "must"
-    ]).ac_ids) or [
-        ac.id for ac in spec.acceptance_criteria if ac.priority == "must"
-    ]
+    must_ids = [ac.id for ac in spec.acceptance_criteria if ac.priority == "must"]
+    section_map = parse_ac_sections(script_content, must_ids)
+    ac_ids = sorted(section_map.ac_ids) or must_ids
     per_criterion: list[CriterionResult] = []
     buggy_failed = result.exit_code != 0
     for ac_id in ac_ids:
@@ -177,12 +124,14 @@ def build_execution_evidence_from_result(
             )
         )
 
-    primary = ac_ids[0] if ac_ids and buggy_failed else None
+    primary = None
+    if ac_ids and buggy_failed:
+        primary = ac_ids[0]
 
-    legacy_ok, _ = validate_calibration_legacy(
+    legacy_ok, _ = strict_legacy_ok(
         spec.task_type,
-        spec,
         result,
+        script_content,
     )
     uncovered = [
         e
@@ -196,4 +145,6 @@ def build_execution_evidence_from_result(
         overall_exit_code=result.exit_code,
         per_criterion_results=per_criterion,
         primary_failure_ac_id=primary,
+        execution_mode="holistic",
+        preflight_passed=True,
     )

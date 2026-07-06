@@ -115,6 +115,7 @@ def run_agent(
     print_more: bool,
     conv_round_limit: int,
     num_processes: int,
+    enable_semantic_injection_ver1: bool = False,
 ):
     """
     Run the agent to perform the experiment.
@@ -149,6 +150,8 @@ def run_agent(
         cmd += "--enable-angelic "
     if enable_perfect_angelic:
         cmd += "--enable-perfect-angelic "
+    if enable_semantic_injection_ver1:
+        cmd += "--enable-semantic-injection-ver1 "
     if not print_more:
         cmd += "--no-print "
 
@@ -380,6 +383,9 @@ def main():
     enable_validation = config.getboolean(
         "DEFAULT", "enable_validation", fallback=False
     )
+    enable_semantic_injection_ver1 = config.getboolean(
+        "DEFAULT", "enable_semantic_injection_ver1", fallback=False
+    )
     enable_angelic = config.getboolean("DEFAULT", "enable_angelic", fallback=False)
     enable_perfect_angelic = config.getboolean(
         "DEFAULT", "enable_perfect_angelic", fallback=False
@@ -415,7 +421,12 @@ def main():
             print_more,
             conv_round_limit,
             num_processes,
+            enable_semantic_injection_ver1,
         )
+
+    if os.getenv("SKIP_EVAL") == "1":
+        print(f"Experiment {expr_id} agent done (SKIP_EVAL=1). Predictions: {swe_input_file}")
+        return
 
     eval_start_time = datetime.now()
 

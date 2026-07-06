@@ -269,6 +269,15 @@ class SearchResult:
         return res_str
 
 
+@dataclass
+class LocalizationContext:
+    sibling_scan: list[dict]
+    bug_locations_raw: list[dict]
+    module_families: list[str]
+    round_no: int
+    checklist_injected: bool = False
+
+
 class BugLocation:
     rel_file_path: str
     abs_file_path: str
@@ -284,8 +293,23 @@ class BugLocation:
 
     intended_behavior: str
 
+    spec_source: str | None = None
+    spec_rationale: str | None = None
+    neighbor_reference: str | None = None
+    neighbor_eligibility: str | None = None
+    handler_category: str | None = None
+
     def __init__(
-        self, search_res: SearchResult, project_path: str, intended_bebavior: str
+        self,
+        search_res: SearchResult,
+        project_path: str,
+        intended_bebavior: str,
+        *,
+        spec_source: str | None = None,
+        spec_rationale: str | None = None,
+        neighbor_reference: str | None = None,
+        neighbor_eligibility: str | None = None,
+        handler_category: str | None = None,
     ):
         assert search_res.start is not None
         assert search_res.end is not None
@@ -303,6 +327,11 @@ class BugLocation:
         self.method_name = search_res.func_name
 
         self.intended_behavior = intended_bebavior
+        self.spec_source = spec_source
+        self.spec_rationale = spec_rationale
+        self.neighbor_reference = neighbor_reference
+        self.neighbor_eligibility = neighbor_eligibility
+        self.handler_category = handler_category
 
         # we know the line numbers are reliable, so just get the actual
         # code here again to be safe
@@ -311,7 +340,7 @@ class BugLocation:
         )
 
     def to_dict(self):
-        return {
+        d = {
             "rel_file_path": self.rel_file_path,
             "abs_file_path": self.abs_file_path,
             "start": self.start,
@@ -321,6 +350,17 @@ class BugLocation:
             "code": self.code,
             "intended_behavior": self.intended_behavior,
         }
+        if self.spec_source:
+            d["spec_source"] = self.spec_source
+        if self.spec_rationale:
+            d["spec_rationale"] = self.spec_rationale
+        if self.neighbor_reference:
+            d["neighbor_reference"] = self.neighbor_reference
+        if self.neighbor_eligibility:
+            d["neighbor_eligibility"] = self.neighbor_eligibility
+        if self.handler_category:
+            d["handler_category"] = self.handler_category
+        return d
 
     def __eq__(self, other):
         return (

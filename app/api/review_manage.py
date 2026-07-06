@@ -12,6 +12,8 @@ from app.agents.agent_write_patch import PatchAgent, PatchHandle
 from app.data_structures import BugLocation, MessageThread, ReproResult
 from app.log import print_acr, print_review
 from app.search.search_manage import SearchManager
+from app.knowledge.feedback_guard import guard_patch_feedback
+from app.knowledge.semantic_injection import build_semantic_context_ver1
 from app.task import SweTask, Task
 
 
@@ -115,12 +117,19 @@ class ReviewManager:
             self.repro_result_map[coords] = patched_repro_result
             self.save_execution_result(patched_repro_result, *coords)
 
+            review_context = build_semantic_context_ver1(
+                self.task,
+                bug_locs=self.patch_agent.bug_locs,
+                phase="review",
+                task_dir=self.output_dir,
+            )
             review, review_thread = agent_reviewer.run(
                 issue_statement,
                 test_content,
                 patch_content,
                 orig_repro_result,
                 patched_repro_result,
+                extra_context=review_context,
             )
 
             print_review(str(review))
@@ -138,9 +147,15 @@ class ReviewManager:
                 if evaluation_msg:
                     self.patch_agent.add_feedback(patch_handle, evaluation_msg)
 
-            if review.patch_decision == ReviewDecision.NO:
+            if review.patch_decision in (ReviewDecision.NO, ReviewDecision.INCOMPLETE):
+                artifact_path = None
+                if hasattr(self.patch_agent.search_manager, "localization_artifact_path"):
+                    artifact_path = self.patch_agent.search_manager.localization_artifact_path
                 feedback = self.compose_feedback_for_patch_generation(
-                    review, test_content
+                    review,
+                    test_content,
+                    artifact_path=artifact_path,
+                    prev_patch=patch_content,
                 )
                 self.patch_agent.add_feedback(patch_handle, feedback)
                 (
@@ -165,7 +180,21 @@ class ReviewManager:
                 self.save_execution_result(orig_repro_result, *coords)
 
     @classmethod
-    def compose_feedback_for_patch_generation(cls, review: Review, test: str) -> str:
+    def compose_feedback_for_patch_generation(
+        cls, review: Review, test: str, *, artifact_path: str | None = None, prev_patch: str | None = None
+    ) -> str:
+        advice = review.patch_advice
+        advice, _warnings = guard_patch_feedback(
+            advice,
+            artifact_path=artifact_path,
+            prev_patch_content=prev_patch,
+        )
+        incomplete_note = ""
+        if review.patch_decision.value == "incomplete":
+            incomplete_note = (
+                "\n\n[INCOMPLETE] Patch may pass reproducer but does not cover all "
+                "scan needs_fix=yes siblings — fix entire bug class.\n"
+            )
         return (
             f"The previous patch failed a test written by another developer.\n"
             f"Rethink about the code context, reflect, and write another patch.\n"
@@ -180,10 +209,11 @@ class ReviewManager:
             f"{review.patch_analysis}\n"
             "\n"
             "Therefore, the patch does not correctly resovle the issue.\n"
+            f"{incomplete_note}"
             "\n"
             "To correct the patch, here is the advice given by another engineer:\n"
             "\n"
-            f"{review.patch_advice}"
+            f"{advice}"
         )
 
     @classmethod

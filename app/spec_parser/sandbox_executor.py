@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app import config
+from app.spec_parser.calibration_gate import apply_verdict_to_evidence, evaluate_calibration
+from app.spec_parser.per_ac_runner import run_per_ac
 from app.spec_parser.schema import ExecutionEvidence, SandboxExecutionResult, StructuredSpecification
 from app.spec_parser.trace_collector import maybe_collect_trace
 from app.spec_parser.validators import build_execution_evidence_from_result, build_execution_result
@@ -28,11 +30,21 @@ class SandboxExecutor:
         spec: StructuredSpecification,
         *,
         enable_trace: bool = True,
+        lint_report=None,
     ) -> ExecutionEvidence:
         result = self.execute(script_content, enable_trace=enable_trace)
-        return build_execution_evidence_from_result(spec, result, script_content)
+        evidence = build_execution_evidence_from_result(spec, result, script_content)
+        verdict = evaluate_calibration(spec, evidence, script_content, lint_report)
+        return apply_verdict_to_evidence(evidence, verdict)
 
     def execute_per_ac(
-        self, script_content: str, spec: StructuredSpecification
+        self,
+        script_content: str,
+        spec: StructuredSpecification,
+        *,
+        lint_report=None,
     ) -> ExecutionEvidence:
-        return self.execute_with_ac_breakdown(script_content, spec, enable_trace=False)
+        del lint_report  # per-AC runs after preflight in agent
+        evidence = run_per_ac(self.task, script_content, spec)
+        verdict = evaluate_calibration(spec, evidence, script_content, None)
+        return apply_verdict_to_evidence(evidence, verdict)

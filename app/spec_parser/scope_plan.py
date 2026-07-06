@@ -12,6 +12,7 @@ from app.agents.agent_common import InvalidLLMResponse
 from app.data_structures import MessageThread
 from app.model.gpt import common
 from app.spec_parser.schema import AnalysisScope, StructuredSpecification
+from app.spec_parser.entity_extraction import EntityQuerySet, infer_primary_class
 from app.spec_parser.scope_compiler import (
     VISITOR_DELEGATE,
     VISITOR_GUARD,
@@ -31,7 +32,8 @@ visitor_intents (subset of: missing_symbol, guard_raise, delegate_call, loop_bou
 expand_siblings (boolean),
 confidence (0.0-1.0),
 rationale_short (string, optional).
-Do NOT invent file paths outside candidates. Do NOT suggest patches."""
+Do NOT invent file paths outside candidates. Do NOT suggest patches.
+focus_files MUST include a file that defines the primary P1 entity as a class when applicable."""
 
 INTENT_MAP = {
     "missing_symbol": VISITOR_MISSING,
@@ -92,11 +94,23 @@ def validate_scope_plan(
     draft: StructuredSpecification,
     index: SymbolIndex,
     context_domain: str,
+    entities: EntityQuerySet | None = None,
 ) -> AnalysisScope | None:
     candidate_paths = {c.rel_path for c in candidates}
     focus_files = [f for f in plan_data.get("focus_files", []) if f in candidate_paths]
     if not focus_files:
         return None
+
+    if config.spec_parser_require_primary_class_in_scope:
+        from app.spec_parser.entity_extraction import EntityQuerySet as EQS
+
+        primary = infer_primary_class(entities or EQS(), draft)
+        if primary and primary in index.classes:
+            if not any(
+                any(loc.rel_path == f for loc in index.classes[primary])
+                for f in focus_files
+            ):
+                return None
 
     allowed_symbols: set[str] = set()
     if draft.failure_anchor:
@@ -140,6 +154,7 @@ def maybe_apply_scope_plan(
     candidates: list[FileCandidate],
     index: SymbolIndex,
     base_scope: AnalysisScope,
+    entities: EntityQuerySet | None = None,
 ) -> tuple[AnalysisScope, ScopePlanMeta]:
     meta = ScopePlanMeta()
     if not config.spec_parser_scope_llm:
@@ -162,7 +177,12 @@ def maybe_apply_scope_plan(
         return base_scope, meta
 
     validated = validate_scope_plan(
-        plan_data, candidates, draft, index, base_scope.context_domain
+        plan_data,
+        candidates,
+        draft,
+        index,
+        base_scope.context_domain,
+        entities=entities,
     )
     if validated is None:
         logger.warning("ScopePlan validation failed; using deterministic scope")

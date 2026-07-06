@@ -65,6 +65,21 @@ spec_parser_scope_llm: bool = False
 spec_parser_scope_llm_fallback: bool = True
 spec_parser_scope_merge_confidence_min: float = 0.6
 
+# v2.1 dynamic calibration (M6–M9)
+spec_parser_script_preflight: bool = True
+spec_parser_strict_legacy: bool = True
+spec_parser_normalize_ac_markers: bool = True
+spec_parser_preflight_counts_as_round: bool = False
+spec_parser_require_ac_fail_marker: bool = False
+
+# v2.2 Search contract enhancement (M10–M15)
+spec_parser_cooccurrence_bonus: float = 3.0
+spec_parser_primary_entity_boost: float = 1.2
+spec_parser_max_co_fix: int = 8
+spec_parser_require_class_in_index_for_issue_class: bool = True
+spec_parser_require_primary_class_in_scope: bool = True
+spec_parser_search_context_max_snippet_chars: int = 400
+
 # timeout for test cmd execution, currently set to 5 min
 test_exec_timeout: int = 300
 

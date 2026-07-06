@@ -14,7 +14,7 @@ from app.agents.agent_common import InvalidLLMResponse
 from app.data_structures import MessageThread
 from app.infrastructure.shared_memory import SharedMemoryStore
 from app.model.gpt import common
-from app.spec_parser import evidence_fusion, repo_enrichment, spec_refiner
+from app.spec_parser import contract_refiner, evidence_fusion, repo_enrichment, spec_refiner
 from app.spec_parser.memory_writer import save_all_artifacts, save_thread
 from app.spec_parser.parser_prompts import (
     ISSUE_STRUCTURING_SYSTEM_PROMPT,
@@ -52,6 +52,8 @@ class SpecParsingAgent:
     ) -> StructuredSpecification:
         repo_ctx = build_repo_context(self.task)
         draft, extract_thread = self._extract_and_structure(issue_text, repo_ctx)
+        draft = contract_refiner.refine(draft, issue_text)
+        draft.parser_version = "2.2.0"
         save_thread(self.output_dir, extract_thread, "extract")
 
         enrichment = None
@@ -88,12 +90,37 @@ class SpecParsingAgent:
                 self._persist(spec, issue_text)
                 return spec
 
-            evidence = self.sandbox.execute_with_ac_breakdown(
-                script.content, spec, enable_trace=True
-            )
+            lint_report = None
+            if config.spec_parser_script_preflight:
+                from app.spec_parser.script_linter import lint_feedback, preflight
+
+                lint_report = preflight(spec, script.content)
+                (self.output_dir / f"script_lint_round_{rnd}.json").write_text(
+                    lint_report.model_dump_json(indent=2)
+                )
+                if not lint_report.passed:
+                    feedback = format_feedback(
+                        round_no=rnd,
+                        exit_code=None,
+                        validation_reason=lint_feedback(lint_report),
+                        failed_criteria_ids=lint_report.missing_ac_ids,
+                        uncovered_co_fix=list(spec.fix_scope.co_fix_required),
+                        stderr_truncated="",
+                    )
+                    logger.info("Spec parser preflight round {} failed", rnd)
+                    continue
+
+            if config.spec_parser_ac_isolated_run:
+                evidence = self.sandbox.execute_per_ac(
+                    script.content, spec, lint_report=lint_report
+                )
+            else:
+                evidence = self.sandbox.execute_with_ac_breakdown(
+                    script.content, spec, enable_trace=True, lint_report=lint_report
+                )
             spec.execution_evidence = evidence
             passed, reason, failed_ac, uncovered = validate_ac_calibration(
-                spec, evidence, script.content
+                spec, evidence, script.content, lint_report
             )
             spec.repro_script = script.with_calibration(
                 passed=passed,

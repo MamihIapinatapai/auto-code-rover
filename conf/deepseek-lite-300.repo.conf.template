@@ -1,0 +1,15 @@
+id:REPO_PLACEHOLDER
+date:2026-06-01
+experiment_dir:/workspace/acr/experiment/deepseek-lite-300/repos
+setup_result_dir:/opt/SWE-bench/setup_result
+swe_bench_dir:/opt/SWE-bench
+docker_swe_bench_dir:/opt/SWE-bench-docker
+
+model:litellm-generic-deepseek/deepseek-chat
+temperature:0.2
+conv_round_limit:10
+selected_tasks_file:/workspace/acr/TASKS_FILE_PLACEHOLDER
+enable_validation:false
+print:false
+num_processes:2
+notes:"DeepSeek SWE-bench Lite 300 per-repo (Baseline Feishu upload)"

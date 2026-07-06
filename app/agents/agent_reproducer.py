@@ -266,7 +266,26 @@ class TestAgent:
             return None
 
     def save_test(self, handle: TestHandle) -> None:
-        Path(self.task_dir, f"reproducer_{handle}.py").write_text(self._tests[handle])
+        content = self._tests[handle]
+        Path(self.task_dir, f"reproducer_{handle}.py").write_text(content)
+        self._write_printing_sniff_advisory(content)
+
+    def _write_printing_sniff_advisory(self, test_content: str) -> None:
+        """P2: advisory warn when reproducer only checks narrow printing symptom."""
+        from app import config
+
+        if not config.enable_sympy_pipeline_v2:
+            return
+        issue = self.task.get_issue_statement().lower()
+        if "printing" not in issue and "_print" not in test_content:
+            return
+        narrow = "not supported" in test_content.lower() and "piecewise" not in test_content.lower()
+        if narrow:
+            advisory = (
+                "[ADVISORY] Reproducer may only check 'Not supported' strings without "
+                "Dispatch Dependency Prerequisite coverage — hidden suite may be broader."
+            )
+            Path(self.task_dir, "reproducer_sniff_advisory.txt").write_text(advisory)
 
 
 def generator(

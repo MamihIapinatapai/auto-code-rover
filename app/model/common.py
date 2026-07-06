@@ -139,14 +139,16 @@ class LiteLLMGeneric(Model):
             if response_format == "json_object":  # prefill
                 messages.append({"role": "assistant", "content": prefill_content})
 
+            rf_param = None
+            if response_format == "json_object":
+                rf_param = {"type": "json_object"}
+
             response = litellm.completion(
                 model=self.name,
                 messages=messages,
                 temperature=MODEL_TEMP,
-                max_tokens=os.getenv("ACR_TOKEN_LIMIT", 1024),
-                response_format=(
-                    {"type": response_format} if "gpt" in self.name else None
-                ),
+                max_tokens=int(os.getenv("ACR_TOKEN_LIMIT", 1024)),
+                response_format=rf_param,
                 top_p=top_p,
                 stream=False,
             )

@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app import config
 from app.spec_parser.schema import SharedWorkingMemory, StructuredSpecification
 from app.task import Task
 
@@ -82,9 +83,18 @@ class SharedMemoryStore:
             "=== Repair Contract (Specification Parsing Agent) ===",
             f"Task Type: {spec.task_type.value}",
             f"Summary: {spec.summary}",
-            "",
-            "## Repair Goals (authoritative)",
         ]
+        if spec.execution_evidence and not spec.execution_evidence.calibration_passed:
+            lines.extend(
+                [
+                    "",
+                    "## Calibration Status",
+                    "calibration_passed: false",
+                    f"reason: {spec.execution_evidence.calibration_error or 'validation failed'}",
+                ]
+            )
+
+        lines.extend(["", "## Repair Goals (authoritative)"])
         for g in spec.repair_goals:
             lines.append(f"- {g}")
 
@@ -147,6 +157,24 @@ class SharedMemoryStore:
 
         if spec.repo_enrichment:
             re = spec.repo_enrichment
+            if re.target_files:
+                lines.append("")
+                lines.append("## Target Files (P2 static scope, ranked)")
+                for i, tf in enumerate(re.target_files[:5], start=1):
+                    lines.append(f"{i}. {tf}")
+            primary = None
+            preferred_file = None
+            if spec.failure_anchor and spec.failure_anchor.named_entities:
+                primary = spec.failure_anchor.named_entities[0]
+            if re.target_files:
+                preferred_file = re.target_files[0]
+            if primary or preferred_file:
+                lines.append("")
+                lines.append("## Primary Anchor")
+                if primary:
+                    lines.append(f"entity: {primary}")
+                if preferred_file:
+                    lines.append(f"preferred_file: {preferred_file}")
             if re.context_domain:
                 lines.append("")
                 lines.append("## Context Domain")
@@ -155,7 +183,25 @@ class SharedMemoryStore:
                 lines.append("")
                 lines.append("## Static: Missing Handlers")
                 lines.append(", ".join(re.missing_handlers))
+            neighbor = re.neighbor_reference or spec.architecture_hint.neighbor_reference
+            if neighbor:
+                lines.append(f"neighbor_reference: {neighbor}")
             if re.search_api_hints:
-                lines.append("search_api_hints: " + ", ".join(re.search_api_hints))
+                lines.append(
+                    "search_api_hints: " + ", ".join(re.search_api_hints[:15])
+                )
+            max_snip = config.spec_parser_search_context_max_snippet_chars
+            if re.evidence_snippets:
+                lines.append("")
+                lines.append("## Static Evidence (snippet)")
+                for key, text in list(re.evidence_snippets.items())[:2]:
+                    snippet = text[:max_snip].replace("\n", " ")
+                    lines.append(f"{key}: {snippet}")
+
+        if spec.issue_completeness.reporter_drafts:
+            lines.append("")
+            lines.append("## Reporter Drafts (non-authoritative)")
+            for draft in spec.issue_completeness.reporter_drafts[:3]:
+                lines.append(f"- {draft[:200]}")
 
         return "\n".join(lines)

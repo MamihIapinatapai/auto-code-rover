@@ -7,6 +7,10 @@ from pathlib import Path
 
 from app.spec_parser.entity_extraction import collect_entities
 from app.spec_parser.generic_enrichment import run_generic_enrichment
+from app.spec_parser.issue_symbol_coverage import (
+    symbols_in_issue_text,
+    uncovered_handlers_in_scope,
+)
 from app.spec_parser.repo_context import RepoContext
 from app.spec_parser.schema import (
     RepoEnrichment,
@@ -32,17 +36,37 @@ def run(
     output_dir: Path | str | None = None,
 ) -> tuple[RepoEnrichment, TargetResolutionArtifact]:
     del repo_ctx  # reserved for future repo metadata
-    entities = collect_entities(issue_text, draft)
     index = build_symbol_index(task.project_path)
-    candidates = resolve_target_files(task.project_path, entities, index)
+    entities = collect_entities(issue_text, draft, index=index)
+    candidates = resolve_target_files(task.project_path, entities, index, draft=draft)
     domain = infer_context_domain(candidates)
     base_scope = compile_analysis_scope(draft, candidates, index, domain)
-    scope, plan_meta = maybe_apply_scope_plan(draft, candidates, index, base_scope)
-    enrichment = run_generic_enrichment(task, scope, draft, index)
+    scope, plan_meta = maybe_apply_scope_plan(
+        draft, candidates, index, base_scope, entities=entities
+    )
+    enrichment = run_generic_enrichment(task, scope, draft, index, issue_text=issue_text)
+
+    issue_symbols = symbols_in_issue_text(
+        issue_text, draft.issue_completeness.reporter_drafts
+    )
+    uncovered = uncovered_handlers_in_scope(
+        issue_symbols, scope.files, task.project_path, index
+    )
+    if uncovered:
+        merged_missing = set(enrichment.missing_handlers) | set(uncovered)
+        enrichment = enrichment.model_copy(
+            update={"missing_handlers": sorted(merged_missing)}
+        )
 
     artifact = TargetResolutionArtifact(
         entities=[
-            {"name": q.name, "kind": q.kind, "source": q.source, "weight": q.weight}
+            {
+                "name": q.name,
+                "kind": q.kind,
+                "source": q.source,
+                "weight": q.weight,
+                "is_primary": q.is_primary,
+            }
             for q in entities.queries
         ],
         candidates=[

@@ -27,10 +27,15 @@ def print_stacktrace(e: Exception):
     print(f"{e.__class__.__name__}: {e}", file=sys.stderr)
 
 ## Wide acceptance rules
-1. Structure BY AC: use `# --- AC-XXX ---` sections per criterion id.
+1. Structure BY AC: use `# --- AC-XXX: short description ---` per criterion id (exact id from spec).
 2. Cover ALL must ACs AND fix_scope.co_fix_required AND prerequisite probes.
 3. Respect negative_constraints.
 4. No weak checks like "Not supported not in output" alone.
+5. Each AC must raise AssertionError on failure; do NOT catch and return False.
+6. Optional: print `AC-XXX FAIL` to stderr before raising (helps calibration).
+7. Do NOT use numpy or lambdify(..., 'numpy'). Use sympy subs/evalf for numeric checks.
+8. Do NOT use from __future__ imports. Do NOT import get_sympy or path_hack.
+9. If fix_scope.prerequisite mentions Relational, include AC-REL testing Ne/Eq output.
 
 BUG_FIX: unpatched codebase must fail; fixed codebase exit 0.
 Filename: reproduce_issue.py (BUG_FIX) or test_feature.py (FEATURE).

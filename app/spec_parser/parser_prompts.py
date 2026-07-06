@@ -37,6 +37,8 @@ Respond with ONLY valid JSON (no markdown):
 - Reporter fenced code goes to reporter_drafts, not as sole repair_goals.
 - Every must AC needs covers_entity; at least one should AC with generalization.
 - Do NOT invent file paths. Do NOT output bug_locations or patch suggestions.
+- Reporter drafts containing Ne/Eq/Piecewise are architecture clues; put derived items in fix_scope.prerequisite, not only in reporter_drafts.
+- If Issue lists multiple independent bugs, repair_goals should only include must-AC-covered items; demote others to symptom_goals and out_of_scope.
 """
 
 ISSUE_STRUCTURING_USER_TEMPLATE = """## Repository Context

@@ -6,6 +6,9 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from app import config
+from app.knowledge.ver1 import ACR_LOG_PREFIX, ACR_VERSION
+
 
 def terminal_width():
     try:
@@ -25,9 +28,18 @@ def log_exception(exception):
     logger.exception(exception)
 
 
+def _acr_display_name() -> str:
+    if config.enable_semantic_injection_ver1:
+        return f"AutoCodeRover-{ACR_VERSION}"
+    return "AutoCodeRover"
+
+
 def print_banner(msg: str) -> None:
     if not print_stdout:
         return
+
+    if config.enable_semantic_injection_ver1:
+        logger.info("{} {}", ACR_LOG_PREFIX, msg)
 
     banner = f" {msg} ".center(WIDTH, "=")
     console.print()
@@ -67,7 +79,7 @@ def print_acr(msg: str, desc="") -> None:
     msg = replace_html_tags(msg)
     markdown = Markdown(msg)
 
-    name = "AutoCodeRover"
+    name = _acr_display_name()
     if desc:
         title = f"{name} ({desc})"
     else:

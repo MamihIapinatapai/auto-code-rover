@@ -59,6 +59,7 @@ class Review:
 class ReviewDecision(Enum):
     YES = "yes"
     NO = "no"
+    INCOMPLETE = "incomplete"
 
 
 def extract_review_result(content: str) -> Review | None:
@@ -92,6 +93,7 @@ def run(
     orig_repro: ReproResult,
     patched_repro: ReproResult,
     retries: int = 5,
+    extra_context: str | None = None,
 ) -> tuple[Review, MessageThread]:
     review_generator = run_with_retries(
         issue_statement,
@@ -102,6 +104,7 @@ def run(
         patched_repro.stdout,
         patched_repro.stderr,
         retries=retries,
+        extra_context=extra_context,
     )
     for review, thread in review_generator:
         # TODO: make output dir global, so that the raw responses can be dumped
@@ -121,12 +124,16 @@ def run_with_retries(
     patched_test_stdout: str,
     patched_test_stderr: str,
     retries: int = 5,
+    extra_context: str | None = None,
 ) -> Generator[tuple[Review | None, MessageThread], None, None]:
     prefix_thread = MessageThread()
     prefix_thread.add_system(SYSTEM_PROMPT)
 
     issue_prompt = f"Here is the issue: <issue>{issue_statement}</issue>.\n"
     prefix_thread.add_user(issue_prompt)
+
+    if extra_context:
+        prefix_thread.add_user(extra_context)
 
     test_prompt = f"Here is the test written by Engineer A: <test>{test}</test>.\n"
     prefix_thread.add_user(test_prompt)
@@ -168,7 +175,9 @@ def run_with_retries(
         "}\n"
         "```\n"
         "\n"
-        'where "patch-correct"/"test-correct" is "yes" or "no"; '
+        'where "patch-correct" is "yes", "no", or "incomplete" (use incomplete when patch '
+        'fixes reproducer but scan table shows uncovered sibling CO_FIX rows); '
+        '"test-correct" is "yes" or "no"; '
         '"patch-analysis"/"test-analysis" should explain the reasoning behind your answer.\n'
         'Moreover, if your answer is "no", then give me advice about how to correct'
         ' the patch/test in the "patch-advice"/"test-advice" field.\n'

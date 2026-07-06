@@ -24,8 +24,7 @@ def test_run_pr_review():
         '{"patch_number": 2, "reason": "patch2 is minimal"}',
     ]
     dummy_model = DummyModel(responses)
-    # Replace MODEL_HUB entry.
-    common.MODEL_HUB = {"gpt-4-0125-preview": dummy_model}
+    common.SELECTED_MODEL = dummy_model
 
     issue_statement = "This is a test issue"
     patch_contents = ["patch content 1", "patch content 2"]

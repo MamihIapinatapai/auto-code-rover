@@ -19,6 +19,7 @@ from app.spec_parser.visitors.return_shape import (
     ReturnShapeVisitor,
     index_class_methods,
 )
+from app.spec_parser.visitors.sibling_patterns import expand_loop_siblings
 from app.task import Task
 
 
@@ -27,6 +28,7 @@ def run_generic_enrichment(
     scope: AnalysisScope,
     draft: StructuredSpecification,
     index: SymbolIndex,
+    issue_text: str = "",
 ) -> RepoEnrichment:
     root = Path(task.project_path)
     missing_handlers: set[str] = set(scope.missing_symbols)
@@ -104,11 +106,7 @@ def run_generic_enrichment(
                         co_fix.add(mname)
                         arch_pattern = "loop_clamp"
                         if scope.expand_siblings:
-                            co_fix.update(
-                                n
-                                for n in methods_map
-                                if n != mname and not n.startswith("__")
-                            )
+                            co_fix.update(expand_loop_siblings(source, mname))
 
     if draft.fix_scope.co_fix_required:
         co_fix.update(draft.fix_scope.co_fix_required)

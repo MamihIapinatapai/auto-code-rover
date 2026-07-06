@@ -1,4 +1,5 @@
 import json
+import os
 from collections import Counter
 
 from tenacity import retry, stop_after_attempt
@@ -11,12 +12,23 @@ SYSTEM_PROMPT = (
     " actually will resolve the given issue."
 )
 
+DEFAULT_PATCH_SELECT_MODEL = "litellm-generic-deepseek/deepseek-chat"
+
+
+def _selection_model():
+    if getattr(common, "SELECTED_MODEL", None) is not None:
+        return common.SELECTED_MODEL
+    common.set_model(
+        os.getenv("ACR_PATCH_SELECT_MODEL", DEFAULT_PATCH_SELECT_MODEL)
+    )
+    return common.SELECTED_MODEL
+
 
 @retry(stop=stop_after_attempt(3))
 def run(
     issue_statement: str, patch_contents: list[str]
 ) -> tuple[int, str, MessageThread]:
-    model = common.MODEL_HUB["gpt-4-0125-preview"]
+    model = _selection_model()
     model.setup()
 
     prefix_thread = MessageThread()

@@ -160,6 +160,16 @@ class ExecutionEvidence(BaseModel):
     per_criterion_results: list[CriterionResult] = Field(default_factory=list)
     primary_failure_ac_id: str | None = None
     calibration_error: str | None = None
+    execution_mode: Literal["holistic", "per_ac"] = "holistic"
+    preflight_passed: bool = True
+
+
+class ScriptLintReport(BaseModel):
+    passed: bool = True
+    blocking_rules: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    ac_section_map: dict[str, list[int]] = Field(default_factory=dict)
+    missing_ac_ids: list[str] = Field(default_factory=list)
 
 
 class RepoEnrichment(BaseModel):
@@ -219,7 +229,7 @@ class StructuredSpecification(BaseModel):
     repo_enrichment: RepoEnrichment | None = None
     issue_noise_filtered: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
-    parser_version: str = "2.0.0"
+    parser_version: str = "2.2.0"
 
     @field_validator("repair_goals", mode="before")
     @classmethod

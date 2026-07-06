@@ -15,6 +15,8 @@ from loguru import logger
 from app.agents import agent_common
 from app.agents.agent_common import InvalidLLMResponse
 from app.data_structures import BugLocation, MessageThread
+from app.knowledge.semantic_injection import build_semantic_context_ver1
+from app.knowledge.ver1 import ACR_LOG_PREFIX
 from app.log import print_acr, print_patch_generation
 from app.model import common
 from app.post_process import (
@@ -22,6 +24,11 @@ from app.post_process import (
     convert_response_to_diff,
     extract_diff_one_instance,
     record_extract_status,
+)
+from app import config
+from app.knowledge.sympy_pattern_linter import (
+    has_blocking_patch_findings,
+    lint_patch,
 )
 from app.search.search_manage import SearchManager
 from app.task import Task
@@ -33,7 +40,9 @@ Another developer has already collected code context related to the issue for yo
 Your task is to write a patch that resolves this issue.
 Do not make changes to test files or write tests; you are only interested in crafting a patch.
 REMEMBER:
-- You should only make minimal changes to the code to resolve the issue.
+- Fix all needs_fix=yes locations from localization; skip scan-marked-safe only.
+- Trust hierarchy: eligible neighbor/parent source over Issue when they CONFLICT.
+- Smallest patch that fixes the bug class (not every Issue symptom).
 - Your patch should preserve the program functionality as much as possible.
 - In your patch, DO NOT include the line numbers at the beginning of each line!
 """
@@ -42,8 +51,9 @@ REMEMBER:
 USER_PROMPT_INIT = """Write a patch for the issue, based on the relevant code context.
 First explain the reasoning, and then write the actual patch.
 When writing the patch, remember the following:
- - You do not have to modify every location provided - just make the necessary changes.
- - Pay attention to the addtional context as well - sometimes it might be better to fix there.
+ - Fix every localization needs_fix=yes handler from the sibling scan table.
+ - If intended_behavior conflicts with visible eligible neighbor code, follow NEIGHBOR SOURCE.
+ - Pay attention to the additional context as well - sometimes it might be better to fix there.
  - You should import necessary libraries if needed.
 
 Return the patch in the format below.
@@ -196,12 +206,58 @@ class PatchAgent:
         )
         record_extract_status(self.task_dir, extract_status)
 
+        applicable = extract_status == ExtractStatus.APPLICABLE_PATCH
+        if applicable and config.enable_sympy_pipeline_v2 and diff_content:
+            applicable = self._run_patch_linter(diff_content, history_handles, thread)
+
         return (
-            extract_status == ExtractStatus.APPLICABLE_PATCH,
+            applicable,
             patch_resp,
             diff_content,
             thread,
         )
+
+    def _run_patch_linter(
+        self,
+        diff_content: str,
+        history_handles: list[PatchHandle],
+        thread: MessageThread,
+    ) -> bool:
+        with NamedTemporaryFile(prefix="lint_patch_", suffix=".diff", delete=False) as f:
+            f.write(diff_content.encode())
+            diff_path = f.name
+
+        prev_diff = None
+        if history_handles:
+            last = history_handles[-1]
+            prev_diff_content = self._diffs.get(last)
+            if prev_diff_content:
+                with NamedTemporaryFile(
+                    prefix="lint_prev_", suffix=".diff", delete=False
+                ) as pf:
+                    pf.write(prev_diff_content.encode())
+                    prev_diff = pf.name
+
+        artifact_path = self.search_manager.localization_artifact_path
+        findings = lint_patch(
+            diff_path,
+            self.search_manager.backend.project_path,
+            artifact_path,
+            self.bug_locs,
+            prev_diff_path=prev_diff,
+        )
+        if has_blocking_patch_findings(findings):
+            remediation = "; ".join(
+                f"{x.rule_id}: {x.remediation}"
+                for x in findings
+                if x.severity == "block"
+            )
+            thread.add_user(
+                f"Patch rejected by mechanical linter: {remediation}. "
+                "Rewrite the patch to address these issues."
+            )
+            return False
+        return True
 
     def _construct_init_thread(self) -> MessageThread:
         """
@@ -212,12 +268,31 @@ class PatchAgent:
             thread = MessageThread()
             thread.add_system(SYSTEM_PROMPT)
             thread.add_user(f"Here is the issue:\n{self.issue_stmt}")
+            # TODO (ver1): inject SymPy semantic rules before code context in patch thread
+            semantic_context = build_semantic_context_ver1(
+                self.task,
+                bug_locs=self.bug_locs,
+                phase="patch",
+                task_dir=self.task_dir,
+            )
+            if semantic_context:
+                thread.add_user(semantic_context)
+                logger.info("{} semantic rules injected (patch)", ACR_LOG_PREFIX)
             thread.add_user(self._construct_code_context_prompt())
         else:
             # bug location not there; we use the search conv history to at least get some context
             messages = deepcopy(self.context_thread.messages)
             thread = MessageThread(messages)
             thread = agent_common.replace_system_prompt(thread, SYSTEM_PROMPT)
+            semantic_context = build_semantic_context_ver1(
+                self.task,
+                bug_locs=None,
+                phase="patch",
+                task_dir=self.task_dir,
+            )
+            if semantic_context:
+                thread.add_user(semantic_context)
+                logger.info("{} semantic rules injected (patch, no bug_locs)", ACR_LOG_PREFIX)
 
         return thread
 
@@ -229,9 +304,30 @@ class PatchAgent:
         )
 
         prompt += BugLocation.multiple_locs_to_str_for_model(self.bug_locs)
+
+        if config.enable_sympy_pipeline_v2:
+            artifact_path = Path(self.search_manager.localization_artifact_path)
+            if artifact_path.is_file():
+                import json
+
+                artifact = json.loads(artifact_path.read_text())
+                scan = artifact.get("sibling_scan", [])
+                needs_fix = [
+                    r
+                    for r in scan
+                    if str(r.get("needs_fix", "")).lower() == "yes"
+                ]
+                if needs_fix:
+                    prompt += "\n=== Sibling scan (needs_fix=yes — must all be patched) ===\n"
+                    for row in needs_fix:
+                        prompt += (
+                            f"- {row.get('class', '')}.{row.get('method_or_handler', '')} "
+                            f"({row.get('anti_pattern_id', '')})\n"
+                        )
+
         prompt += (
-            "Note that you DO NOT NEED to modify every location; you should think what changes "
-            "are necessary for resolving the issue, and only propose those modifications."
+            "\nFix all needs_fix=yes handlers from the scan table. "
+            "Skip scan-marked-safe locations only."
         )
         return prompt
 

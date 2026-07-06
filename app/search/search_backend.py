@@ -756,6 +756,15 @@ class SearchBackend:
 
         return final_output, final_search_res, bool(final_output)
 
+    def suggest_semantic_siblings(
+        self, class_name: str, target_method: str, *, fix_path: str = "CO_FIX", limit: int = 5
+    ) -> list[str]:
+        from app.knowledge.neighbor_eligibility import suggest_semantic_siblings
+
+        return suggest_semantic_siblings(
+            self, class_name, target_method, fix_path=fix_path, limit=limit
+        )
+
     def get_bug_loc_snippets_new(self, bug_location_dict: dict[str, str]):
         """
         Since this function is probably buggy, rewrite it.
@@ -864,7 +873,16 @@ class SearchBackend:
         for res in search_res:
             if res.start is None or res.end is None:
                 continue
-            new_bug_loc = BugLocation(res, self.project_path, intended_behavior)
+            new_bug_loc = BugLocation(
+                res,
+                self.project_path,
+                intended_behavior,
+                spec_source=bug_location_dict.get("spec_source"),
+                spec_rationale=bug_location_dict.get("spec_rationale"),
+                neighbor_reference=bug_location_dict.get("neighbor_reference"),
+                neighbor_eligibility=bug_location_dict.get("neighbor_eligibility"),
+                handler_category=bug_location_dict.get("handler_category"),
+            )
             final_bug_locs.append(new_bug_loc)
 
         # deal with additional class context search results

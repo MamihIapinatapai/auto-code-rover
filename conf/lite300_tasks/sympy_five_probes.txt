@@ -1,0 +1,5 @@
+sympy__sympy-12481
+sympy__sympy-11400
+sympy__sympy-12454
+sympy__sympy-11897
+sympy__sympy-12171

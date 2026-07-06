@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Generator
 from contextlib import contextmanager, nullcontext
@@ -135,6 +136,8 @@ class SweTask(Task):
         task = self
         with apputils.cd(task.project_path):
             apputils.repo_reset_and_clean_checkout(task.commit)
+            if config.enable_semantic_injection_ver1:
+                apputils.repo_sanitize_ver1(task.commit)
 
         # Install task-specific dependencies
         do_install = (
@@ -525,3 +528,35 @@ class PlainTask(Task):
 
     def validate(self, patch_content: str) -> tuple[bool, str, str, str]:
         raise NotImplementedError("Cannot do validation for live issues for now")
+
+    def execute_reproducer(
+        self, test_content: str, patch_content: str | None = None
+    ) -> ReproResult:
+        cm = nullcontext() if patch_content is None else self.apply_patch(patch_content)
+
+        with cm:
+            with NamedTemporaryFile(
+                buffering=0, prefix="reproducer-", suffix=".py", dir=self.project_path
+            ) as f:
+                f.write(test_content.encode())
+                try:
+                    cp = subprocess.run(
+                        [sys.executable, f.name],
+                        cwd=self.project_path,
+                        text=True,
+                        capture_output=True,
+                        timeout=120,
+                    )
+                    cp_stdout = cp.stdout
+                    cp_stderr = cp.stderr
+                    cp_returncode = cp.returncode
+                except subprocess.TimeoutExpired:
+                    cp_stdout = ""
+                    cp_stderr = "Test execution timeout."
+                    cp_returncode = -1
+
+        stderr_result = str(cp_stderr)
+        stderr_lines = stderr_result.splitlines()
+        if len(stderr_lines) > 100:
+            stderr_result = "\n".join(stderr_lines[:50] + ["..."] + stderr_lines[-50:])
+        return ReproResult(cp_stdout, stderr_result, cp_returncode)

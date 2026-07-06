@@ -161,3 +161,26 @@ cython_debug/
 
 output/
 setup/
+
+# Experiment outputs & logs
+lite300_output/
+lite300_output_ver1/
+lite300_output_ver1.1/
+lite300_output.bak-*/
+lite300_logs/
+pilot_output/
+spec_parser_probe/
+spec_parser_probe_v2_det/
+spec_parser_probe_v2_scope_llm/
+demo_pilot/
+experiment/
+swe_lite_pull/
+.split/
+*.log
+spec_parser_probe_*.json
+
+# Generated runtime configs
+conf/generated/
+
+# Local secrets (redundant safety)
+conf/.env

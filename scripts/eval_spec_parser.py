@@ -69,6 +69,17 @@ def score_instance(instance_id: str, spec: StructuredSpecification, probe_dir: P
     if spec.execution_evidence:
         metrics["calibration_passed"] = spec.execution_evidence.calibration_passed
         metrics["primary_failure_ac_id"] = spec.execution_evidence.primary_failure_ac_id
+        metrics["execution_mode"] = spec.execution_evidence.execution_mode
+        metrics["preflight_passed"] = spec.execution_evidence.preflight_passed
+
+    repro = spec.repro_script
+    if repro is not None and spec.execution_evidence:
+        metrics["repro_evidence_agree"] = (
+            repro.calibration_passed == spec.execution_evidence.calibration_passed
+        )
+
+    lint_path = probe_dir / instance_id / "script_lint_round_1.json"
+    metrics["preflight_artifact_exists"] = lint_path.is_file()
 
     return metrics
 

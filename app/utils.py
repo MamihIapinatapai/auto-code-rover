@@ -134,6 +134,18 @@ def repo_clean_changes() -> None:
     run_command(clean_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def repo_sanitize_ver1(commit_hash: str | None = None) -> None:
+    """
+    TODO (ver1): aggressive repo cleanup before L2/L3 to prevent patch pollution.
+    Runs git reset --hard and git clean -fdx (ignores .gitignore).
+    """
+    target = commit_hash if commit_hash else "HEAD"
+    reset_cmd = ["git", "reset", "--hard", target]
+    clean_cmd = ["git", "clean", "-fdx"]
+    run_command(reset_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run_command(clean_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def repo_reset_and_clean_checkout(commit_hash: str) -> None:
     """
     Run commands to reset repo to the original commit state.
