@@ -1,11 +1,11 @@
-"""v2.2 vs v3.0 spec parser pipeline selection helpers."""
+"""v2.2 vs v3.x spec parser pipeline selection helpers."""
 
 from __future__ import annotations
 
 from app import config
 
 V2_PARSER_VERSION = "2.2.0"
-V3_PARSER_VERSION = "3.0.0"
+V3_PARSER_VERSION = "3.1.0"
 
 
 def is_v3_pipeline() -> bool:

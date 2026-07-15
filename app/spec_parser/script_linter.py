@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import ast
 import re
 
 from app import config
 from app.spec_parser.ac_markers import parse_ac_sections
 from app.spec_parser.grounding import enforceable_co_fix, enforceable_prerequisite
 from app.spec_parser.schema import ScriptLintReport, StructuredSpecification, TaskType
+
+_STUB_RE = re.compile(r'AssertionError\s*\(\s*[\'"]Stub\b', re.IGNORECASE)
+_TEST_DEF_RE = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.MULTILINE)
 
 
 def _must_ids(spec: StructuredSpecification) -> list[str]:
@@ -42,10 +46,18 @@ def preflight(
         elif _co_fix_lacks_executable_assert(script, entity, section_map):
             blocking.append("L2-COFIX-WEAK")
 
-    if getattr(config, "spec_parser_use_v3_prompts", False) and _has_existence_only_ac(
-        script, section_map
-    ):
+    # v3.1: L10 always on (was gated behind use_v3_prompts)
+    if _has_existence_only_ac(script, section_map):
         blocking.append("L10-EXISTENCE-ONLY")
+
+    if _has_vacuous_assert(script, section_map):
+        blocking.append("L13-VACUOUS-ASSERT")
+
+    if _has_dead_test_functions(script):
+        blocking.append("L11-DEAD-AC")
+
+    if _has_stub_only_ac(script, section_map):
+        blocking.append("L12-STUB-AC")
 
     if _has_weak_sinc_only(script, spec):
         blocking.append("L3-WEAK-ASSERT-SINC")
@@ -101,22 +113,124 @@ def _co_fix_lacks_executable_assert(script: str, entity: str, section_map) -> bo
     return True
 
 
+def _is_existence_only_assert(stmt: str) -> bool:
+    s = stmt.strip()
+    if re.fullmatch(r"assert\s+True\b.*", s, re.DOTALL):
+        return True
+    if re.fullmatch(r"assert\s+hasattr\s*\([^)]+\)\s*(,\s*.*)?", s, re.DOTALL):
+        return True
+    if re.fullmatch(r"assert\s+callable\s*\([^)]+\)\s*(,\s*.*)?", s, re.DOTALL):
+        return True
+    if re.fullmatch(
+        r"assert\s+\w+(\.\w+)*\s+is\s+not\s+None\s*(,\s*.*)?", s, re.DOTALL
+    ):
+        return True
+    return False
+
+
+def _behavioral_assert_lines(body: str) -> list[str]:
+    lines = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("assert "):
+            lines.append(stripped)
+    return lines
+
+
 def _has_existence_only_ac(script: str, section_map) -> bool:
+    """True if some AC section only has existence-style asserts (no real behavior)."""
     for ac_id in section_map.found:
         body = _section_text(script, ac_id, section_map)
         if not body:
             continue
-        has_existence = bool(re.search(r"\bhasattr\s*\(|\bcallable\s*\(", body))
-        has_behavior = bool(
-            re.search(r"\bassert\b", body)
-            and not re.fullmatch(
-                r"\s*assert\s+hasattr\s*\([^)]+\)\s*",
-                body.strip(),
-                re.DOTALL,
-            )
-        )
-        if has_existence and not has_behavior:
+        asserts = _behavioral_assert_lines(body)
+        has_existence_call = bool(re.search(r"\bhasattr\s*\(|\bcallable\s*\(", body))
+        if not asserts and not has_existence_call:
+            continue
+        if asserts and all(_is_existence_only_assert(a) for a in asserts):
             return True
+        if has_existence_call and not asserts:
+            return True
+        # hasattr present and every assert is existence-only
+        if has_existence_call and asserts and all(
+            _is_existence_only_assert(a) for a in asserts
+        ):
+            return True
+    return False
+
+
+def _has_vacuous_assert(script: str, section_map) -> bool:
+    for ac_id in section_map.found:
+        body = _section_text(script, ac_id, section_map)
+        if re.search(r"\bassert\s+True\b", body):
+            return True
+    # also catch module-level outside sections
+    if section_map.found and re.search(r"\bassert\s+True\b", script):
+        # already covered per-section; keep consistent
+        pass
+    return False
+
+
+def _has_dead_test_functions(script: str) -> bool:
+    """Nested/top-level test_* defs that are never called → dead AC pattern."""
+    defined = set(_TEST_DEF_RE.findall(script))
+    if not defined:
+        return False
+    called: set[str] = set()
+    try:
+        tree = ast.parse(script)
+    except SyntaxError:
+        # fallback: any call-looking use outside def lines
+        for name in defined:
+            if re.search(rf"(?<!def )\b{re.escape(name)}\s*\(", script):
+                called.add(name)
+        return bool(defined - called)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in defined:
+                called.add(func.id)
+            elif isinstance(func, ast.Attribute) and func.attr in defined:
+                called.add(func.attr)
+    return bool(defined - called)
+
+
+def _has_stub_only_ac(script: str, section_map) -> bool:
+    for ac_id in section_map.found:
+        body = _section_text(script, ac_id, section_map)
+        if not body.strip():
+            continue
+        # Strip comments/blank lines
+        code_lines = [
+            ln.strip()
+            for ln in body.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        if not code_lines:
+            continue
+        joined = "\n".join(code_lines)
+        if _STUB_RE.search(joined) and not re.search(
+            r"\bassert\b", joined
+        ):
+            # Only raise Stub... (optionally try/except wrappers)
+            if "raise AssertionError" in joined or _STUB_RE.search(joined):
+                # If body has no project-facing call besides raise, treat as stub
+                if not re.search(
+                    r"\b(assert|getattr|setattr|open|requests\.|client\.|"
+                    r"Retort|Monitor|load|dump|parse|format_)\b",
+                    joined,
+                ):
+                    return True
+                # Explicit Stub message with only raise lines
+                non_raise = [
+                    ln
+                    for ln in code_lines
+                    if not ln.startswith(("raise ", "try:", "except", "pass"))
+                    and "AssertionError" not in ln
+                ]
+                if not non_raise and _STUB_RE.search(joined):
+                    return True
     return False
 
 
@@ -191,13 +305,61 @@ def _fake_import_modules(script: str) -> bool:
 
 
 def _has_swallowed_exceptions(script: str, section_map) -> bool:
+    """v3.1: catch except: pass / broad Exception without AssertionError re-raise."""
     for ac_id in section_map.found:
         from app.spec_parser.ac_markers import extract_ac_section_body
 
         body = extract_ac_section_body(script, ac_id) or ""
-        if "except " in body and "raise AssertionError" not in body:
-            if re.search(r"return\s+False", body):
+        if "except " not in body and "except:" not in body:
+            continue
+        # Classic swallow: except ...: followed by only pass (possibly with blank lines)
+        if re.search(
+            r"except(?:\s+[^:]*)?:\s*\n(?:[ \t]*\n)*[ \t]+pass\b",
+            body,
+        ):
+            return True
+        if re.search(r"except(?:\s+[^:]*)?:\s*\n(?:[ \t]*\n)*[ \t]+return\s+False\b", body):
+            return True
+        # AST-based: except handlers whose body never re-raises
+        try:
+            tree = ast.parse(body)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler):
+                continue
+            stmts = node.body
+            if not stmts:
                 return True
+            if (
+                len(stmts) == 1
+                and isinstance(stmts[0], ast.Pass)
+            ):
+                return True
+            if (
+                len(stmts) == 1
+                and isinstance(stmts[0], ast.Return)
+                and isinstance(stmts[0].value, ast.Constant)
+                and stmts[0].value.value is False
+            ):
+                return True
+            handler_src = ast.get_source_segment(body, node) or ""
+            # Prefer source check for AssertionError re-raise
+            if not re.search(r"raise\s+AssertionError", handler_src) and not any(
+                isinstance(s, ast.Raise) for s in stmts
+            ):
+                # Broad Exception/BaseException catch without re-raise
+                t = node.type
+                broad = t is None
+                if isinstance(t, ast.Name) and t.id in ("Exception", "BaseException"):
+                    broad = True
+                if isinstance(t, ast.Tuple):
+                    broad = any(
+                        isinstance(e, ast.Name) and e.id in ("Exception", "BaseException")
+                        for e in t.elts
+                    )
+                if broad:
+                    return True
     return False
 
 

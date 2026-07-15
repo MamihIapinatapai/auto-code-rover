@@ -35,6 +35,11 @@ Rules:
 8. No network, no file writes, read-only imports.
 9. No weak checks (existence-only, "not in output" without behavioral assertion).
 10. negative_constraints / no_regression: MUST pass on the current buggy codebase; place LAST.
+11. FORBIDDEN: define nested/top-level `def test_*` unless you also call them in the AC body.
+12. FORBIDDEN: `assert True`, unconditional `raise AssertionError("Stub for ...")`,
+    and bare `except Exception: pass` (or any except that only passes).
+13. FORBIDDEN imports unless Issue explicitly requires them: pytest, unittest as hard deps,
+    unrelated stacks (e.g. sympy) when not part of the repo under test.
 """
 
 FEATURE_SCRIPT_SYSTEM_PROMPT = """You are an expert test engineer practicing reverse test-driven development (reverse-TDD)
@@ -60,9 +65,19 @@ Rules:
 6. no_regression_sentinel ACs (criterion_role): MUST pass on the current codebase — place them LAST;
    use behavioral asserts that verify existing behavior still works.
 7. Include happy-path, negative, and edge behavioral asserts (not hasattr-only).
+   Require ≥1 happy-path behavioral assert AND ≥1 negative/conflict behavioral assert.
 8. Use smallest input from the issue; no large loops or full-repo scans.
 9. No network, no file writes, read-only imports.
 10. On each AC failure: print `AC-XXX FAIL` to stderr, then raise AssertionError.
+11. Execute AC logic inline under each `# --- AC-XXX ---` section (scaffold runs top-to-bottom).
+    FORBIDDEN: define nested/top-level `def test_*` unless you also call them.
+12. FORBIDDEN: `assert True`, unconditional `raise AssertionError("Stub for ...")`,
+    and bare `except Exception: pass` (or any except that only passes / returns False).
+13. FORBIDDEN imports unless Issue explicitly requires them: pytest as hard dependency,
+    unrelated stacks (e.g. sympy) when not part of the repo under test.
+14. Prefer catching feature AttributeError/ImportError and re-raising
+    AssertionError("AC-XXX FAIL: NOT_IMPLEMENTED") — do not leave ModuleNotFoundError
+    for pytest/sympy/etc. as the script's only failure mode.
 """
 
 SCRIPT_USER_V3_TEMPLATE = """## Task Type

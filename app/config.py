@@ -83,12 +83,14 @@ spec_parser_require_class_in_index_for_issue_class: bool = True
 spec_parser_require_primary_class_in_scope: bool = True
 spec_parser_search_context_max_snippet_chars: int = 400
 
-# v3.0 pipeline (M16+; default remains v2.2 until M20)
+# v3.x pipeline (M16+; default remains v2.2 until M20 product cutover)
+# Set to "3.1.0" (or any 3.*) to enable v3 pipeline + script-quality gates.
 spec_parser_version: str = "2.2.0"
 spec_parser_use_repair_draft: bool = True
 
-# v3.0 script generation prompts (M17)
-spec_parser_use_v3_prompts: bool = False
+# v3.1 script generation prompts (M17+); L10+ quality rules always on in linter.
+# Prefer True when running DeepSWE / v3 calib so generators use script_prompts_v3.
+spec_parser_use_v3_prompts: bool = True
 
 # timeout for test cmd execution, currently set to 5 min
 test_exec_timeout: int = 300

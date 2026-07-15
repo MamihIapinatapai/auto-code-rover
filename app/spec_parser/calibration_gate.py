@@ -18,6 +18,27 @@ from app.spec_parser.schema import (
 )
 
 _AC_FAIL_RE = re.compile(r"AC-[A-Z0-9]+\s+FAIL", re.IGNORECASE)
+_IMPORT_ERR_RE = re.compile(
+    r"(ImportError|ModuleNotFoundError|No module named)",
+    re.IGNORECASE,
+)
+_NO_MODULE_RE = re.compile(
+    r"No module named ['\"]?([A-Za-z0-9_.]+)",
+    re.IGNORECASE,
+)
+# Unrelated deps that often cause false F2P calibration when missing.
+_ENV_BLACKLIST_MODULES = frozenset(
+    {
+        "pytest",
+        "sympy",
+        "numpy",
+        "pandas",
+        "torch",
+        "tensorflow",
+        "sklearn",
+        "scipy",
+    }
+)
 _SYMPTOM_EXCEPTIONS = (
     "ValueError",
     "TypeError",
@@ -57,6 +78,33 @@ def _feature_not_implemented_fail_ok(stderr: str, script_content: str) -> bool:
     return "NOT_IMPLEMENTED" in blob and "AssertionError" in stderr
 
 
+def _missing_module_name(stderr: str) -> str | None:
+    m = _NO_MODULE_RE.search(stderr)
+    if not m:
+        return None
+    return m.group(1).split(".", 1)[0].lower()
+
+
+def _is_blacklisted_env_import(stderr: str, issue_text: str) -> bool:
+    """True when missing module is a known env noise dep not mentioned in Issue."""
+    mod = _missing_module_name(stderr)
+    if not mod or mod not in _ENV_BLACKLIST_MODULES:
+        return False
+    blob = (issue_text or "").lower()
+    if mod in blob:
+        return False
+    return True
+
+
+def _has_intentional_ac_failure(stderr: str, script_content: str = "") -> bool:
+    blob = stderr + "\n" + script_content
+    if _AC_FAIL_RE.search(stderr):
+        return True
+    if "AssertionError" in stderr and "NOT_IMPLEMENTED" in blob:
+        return True
+    return False
+
+
 def classify_stderr_script_error(
     task_type: TaskType,
     stderr: str,
@@ -67,15 +115,22 @@ def classify_stderr_script_error(
     """Return (is_blocking_error, reason). SyntaxError always blocks."""
     if "SyntaxError" in stderr:
         return True, "SyntaxError in script"
-    if "ImportError" not in stderr:
+
+    if not _IMPORT_ERR_RE.search(stderr):
         return False, ""
+
+    # Blacklisted env deps (pytest/sympy/...) are never intentional AC fails.
+    if _is_blacklisted_env_import(stderr, issue_text):
+        mod = _missing_module_name(stderr) or "unknown"
+        return True, f"ENV ModuleNotFoundError for unrelated dependency: {mod}"
+
     if task_type == TaskType.FEATURE and _feature_not_implemented_fail_ok(
         stderr, script_content
     ):
         return False, ""
     if task_type == TaskType.BUG_FIX and issue_text and _issue_about_imports(issue_text):
         return False, ""
-    return True, "ImportError in script"
+    return True, "ImportError/ModuleNotFoundError in script"
 
 
 def strict_legacy_ok(
@@ -108,7 +163,17 @@ def strict_legacy_ok(
             if "AssertionError" not in stderr and "Error" not in stderr:
                 return False, "Expected AssertionError or exception in stderr"
         return True, ""
-    return result.exit_code != 0, "FEATURE script should fail when missing"
+
+    # FEATURE: must fail, and failure must be intentional AC semantics (v3.1).
+    if result.exit_code == 0:
+        return False, "FEATURE script should fail when missing"
+    if not _has_intentional_ac_failure(stderr, script_content):
+        return (
+            False,
+            "FEATURE requires intentional AC failure "
+            "(AC-XXX FAIL or AssertionError NOT_IMPLEMENTED), not ENV/unrelated errors",
+        )
+    return True, ""
 
 
 def evaluate_calibration(
@@ -124,6 +189,15 @@ def evaluate_calibration(
     section_map = parse_ac_sections(script_content, must_ids)
 
     co_fix_to_enforce = enforceable_co_fix(spec, issue_text)
+
+    if not (script_content or "").strip():
+        return CalibrationVerdict(
+            passed=False,
+            reason="calibration_error: NO_SCRIPT",
+            failed_ac_ids=[],
+            uncovered_co_fix=list(co_fix_to_enforce),
+            stage="preflight",
+        )
 
     if lint_report is not None and not lint_report.passed:
         return CalibrationVerdict(

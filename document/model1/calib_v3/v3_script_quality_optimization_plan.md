@@ -135,14 +135,18 @@
 
 ## 4. 模块改动清单（实施 checklist）
 
-- [ ] `calibration_gate.py`：ModuleNotFoundError；FEATURE 有意失败  
-- [ ] `script_linter.py`：L11/L12/L13；修 L10；硬化 L4  
-- [ ] `script_prompts_v3.py`：硬禁止 bullet  
-- [ ] `config.py`：`spec_parser_use_v3_prompts` 默认策略  
-- [ ] `test/app/spec_parser/`：上述规则单测 + 探针脚本 fixture  
+- [x] `calibration_gate.py`：ModuleNotFoundError；FEATURE 有意失败（**v3.1 已落地**）  
+- [x] `script_linter.py`：L11/L12/L13；修 L10；硬化 L4（**v3.1 已落地**）  
+- [x] `script_prompts_v3.py`：硬禁止 bullet（**v3.1 已落地**）  
+- [x] `config.py`：`spec_parser_use_v3_prompts` 默认 `True`；`pipeline.V3_PARSER_VERSION=3.1.0`  
+- [x] `test/app/spec_parser/`：gate + linter v3.1 单测  
 - [ ] 重跑探针 12 题 calib，更新本目录 `AUDIT_INDEX` / 合成报告附录  
 
 **明确不做（除非新产品需求）**：为 Phase 1 引入多轮「向用户提问」的人机澄清环。
+
+**Git 基线**：
+- Tag `spec-parser-v3.0.0` @ branch `feat/spec-parser-v3.0-baseline`
+- Tag `spec-parser-v3.1.0` @ branch `feat/spec-parser-v3.1-script-quality`（本改动）
 
 ---
 
