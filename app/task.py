@@ -510,6 +510,7 @@ class PlainTask(Task):
     commit_hash: str
     local_path: str
     problem_statement: str
+    task_id: str = ""
 
     @property
     def project_path(self) -> str:

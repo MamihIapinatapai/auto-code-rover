@@ -155,6 +155,16 @@ class SharedMemoryStore:
             lines.append("## Failure Anchor Entities")
             lines.append(", ".join(spec.failure_anchor.named_entities))
 
+        if spec.parser_version.startswith("3"):
+            symptom_summary = "; ".join(spec.symptom_goals) or spec.summary[:300]
+            lines.append("")
+            lines.append("## Repair Draft (v3 behavioral intent)")
+            lines.append(f"symptom_summary: {symptom_summary}")
+            if spec.repair_goals:
+                lines.append("expected_behavior:")
+                for goal in spec.repair_goals:
+                    lines.append(f"- {goal}")
+
         if spec.repo_enrichment:
             re = spec.repo_enrichment
             if re.target_files:

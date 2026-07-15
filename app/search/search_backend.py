@@ -6,6 +6,7 @@ from pathlib import Path
 import timeout_decorator
 from loguru import logger
 
+from app import config
 from app.data_structures import BugLocation, SearchResult
 from app.search import search_utils
 from app.utils import catch_all_and_log
@@ -44,7 +45,15 @@ class SearchBackend:
 
         # function name -> [(file_name, line_range)]
         self.function_index: FuncIndexType = {}
+        self._text_only_mode = self._should_use_text_only_index()
         self._build_index()
+
+    @staticmethod
+    def _should_use_text_only_index() -> bool:
+        if config.enable_text_only_search:
+            return True
+        lang = config.task_language
+        return lang is not None and lang != "python"
 
     def _build_index(self):
         """
@@ -55,6 +64,13 @@ class SearchBackend:
         value is a list of tuples.
         This is for fast lookup whenever we receive a query.
         """
+        if self._text_only_mode:
+            self.parsed_files = search_utils.find_source_files(self.project_path)
+            logger.info(
+                "SearchBackend text-only index: {} source files",
+                len(self.parsed_files),
+            )
+            return
         self._update_indices(*self._build_python_index(self.project_path))
 
     def _update_indices(

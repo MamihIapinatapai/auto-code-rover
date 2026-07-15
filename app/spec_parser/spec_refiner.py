@@ -37,6 +37,17 @@ def _rank_co_fix(candidates: list[str], enrichment: RepoEnrichment) -> list[str]
     return [c for _, c in ranked]
 
 
+def merge_v3(
+    draft: StructuredSpecification,
+    enrichment: RepoEnrichment | None = None,
+) -> StructuredSpecification:
+    """P3' merge for v3: P1 contract only, no static enrichment."""
+    del enrichment
+    spec = draft.model_copy(deep=True)
+    spec.repo_enrichment = None
+    return spec
+
+
 def merge(
     draft: StructuredSpecification,
     enrichment: RepoEnrichment | None,

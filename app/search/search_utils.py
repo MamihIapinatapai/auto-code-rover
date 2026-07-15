@@ -39,6 +39,40 @@ def find_python_files(dir_path: str) -> list[str]:
     return res
 
 
+SOURCE_FILE_EXTENSIONS = (
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".rb",
+    ".cs",
+    ".cpp",
+    ".c",
+    ".h",
+    ".hpp",
+)
+
+
+def find_source_files(dir_path: str) -> list[str]:
+    """Collect source files for text-only search (multi-language)."""
+    root = Path(dir_path)
+    res: list[str] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in SOURCE_FILE_EXTENSIONS:
+            continue
+        rel = str(path.relative_to(root))
+        if is_test_file(rel):
+            continue
+        res.append(str(path.resolve()))
+    return sorted(res)
+
+
 def parse_class_def_args(source: str, node: ast.ClassDef) -> list[str]:
     # TODO this is simple enough to cover a lot of cases but can be improvied
     super_classes = []

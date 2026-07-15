@@ -31,10 +31,15 @@ class SandboxExecutor:
         *,
         enable_trace: bool = True,
         lint_report=None,
+        issue_text: str = "",
     ) -> ExecutionEvidence:
         result = self.execute(script_content, enable_trace=enable_trace)
-        evidence = build_execution_evidence_from_result(spec, result, script_content)
-        verdict = evaluate_calibration(spec, evidence, script_content, lint_report)
+        evidence = build_execution_evidence_from_result(
+            spec, result, script_content, issue_text=issue_text
+        )
+        verdict = evaluate_calibration(
+            spec, evidence, script_content, lint_report, issue_text=issue_text
+        )
         return apply_verdict_to_evidence(evidence, verdict)
 
     def execute_per_ac(
@@ -43,8 +48,11 @@ class SandboxExecutor:
         spec: StructuredSpecification,
         *,
         lint_report=None,
+        issue_text: str = "",
     ) -> ExecutionEvidence:
         del lint_report  # per-AC runs after preflight in agent
-        evidence = run_per_ac(self.task, script_content, spec)
-        verdict = evaluate_calibration(spec, evidence, script_content, None)
+        evidence = run_per_ac(self.task, script_content, spec, issue_text=issue_text)
+        verdict = evaluate_calibration(
+            spec, evidence, script_content, None, issue_text=issue_text
+        )
         return apply_verdict_to_evidence(evidence, verdict)

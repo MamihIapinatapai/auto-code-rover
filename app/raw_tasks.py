@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -9,6 +11,9 @@ import requests
 
 from app import utils as app_utils
 from app.log import log_and_print
+from app.deepswe.adapter import load_task
+from app.deepswe.repo_setup import ensure_work_copy
+from app.deepswe.types import DeepSweTaskRecord
 from app.task import PlainTask, SweTask, Task
 
 
@@ -80,6 +85,69 @@ class RawSweTask(RawTask):
             f.write(self.task_info["problem_statement"])
         with open(pjoin(output_dir, "developer_patch.diff"), "w") as f:
             f.write(self.task_info["patch"])
+
+
+class RawDeepSweTask(RawTask):
+    """Encapsulate a DeepSWE Harbor-format task."""
+
+    def __init__(
+        self,
+        record: DeepSweTaskRecord,
+        repos_root: str,
+        local_path: str | None = None,
+    ):
+        self.record = record
+        self._task_id = record.instance_id
+        self.repos_root = repos_root
+        self.local_path = local_path or str(
+            ensure_work_copy(record, repos_root)
+        )
+
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @classmethod
+    def from_task_dir(cls, task_dir: str, repos_root: str) -> RawDeepSweTask:
+        record = load_task(task_dir)
+        return cls(record, repos_root)
+
+    def apply_runtime_config(self) -> None:
+        from app import config
+
+        config.task_language = self.record.language
+        if self.record.language != "python":
+            config.enable_text_only_search = True
+            config.enable_sympy_pipeline_v2 = False
+
+    def dump_meta_data(self, output_dir: str) -> None:
+        meta = {
+            "task_id": self.task_id,
+            "task_info": {
+                "instance_id": self.record.instance_id,
+                "problem_statement": self.record.problem_statement,
+                "repo": self.record.repo_name,
+                "base_commit": self.record.base_commit,
+                "language": self.record.language,
+                "repository_url": self.record.repo_url,
+            },
+            "setup_info": {
+                "repo_path": self.local_path,
+                "deepswe_task_dir": str(self.record.task_dir),
+            },
+        }
+        with open(pjoin(output_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=4)
+        with open(pjoin(output_dir, "problem_statement.txt"), "w", encoding="utf-8") as f:
+            f.write(self.record.problem_statement)
+
+    def to_task(self) -> PlainTask:
+        return PlainTask(
+            commit_hash=self.record.base_commit,
+            local_path=self.local_path,
+            problem_statement=self.record.problem_statement,
+            task_id=self.record.instance_id,
+        )
 
 
 class RawGithubTask(RawTask):

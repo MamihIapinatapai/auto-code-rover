@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.spec_parser.schema import AcceptanceCriterion, StructuredSpecification, TaskType
+import re
+
+from app.spec_parser.schema import AcceptanceCriterion, StructuredSpecification
 
 
 _PRINT_STACKTRACE = '''
@@ -17,6 +19,59 @@ def print_stacktrace(e: Exception):
         print(f'  File "{frame.filename}"', file=sys.stderr)
         print(f"    {line_number}: {code_context}", file=sys.stderr)
     print(f"{e.__class__.__name__}: {e}", file=sys.stderr)
+'''
+
+
+def sanitize_generated_body(body: str) -> str:
+    """Remove duplicate scaffold fragments the LLM may emit despite instructions."""
+    out = body.strip()
+    if not out:
+        return out
+    out = re.sub(
+        r"def print_stacktrace\s*\([^)]*\)\s*:.*?(?=\n(?:# ---|\S))",
+        "",
+        out,
+        count=1,
+        flags=re.DOTALL,
+    )
+    out = re.sub(
+        r"if __name__\s*==\s*['\"]__main__['\"]\s*:.*",
+        "",
+        out,
+        flags=re.DOTALL,
+    )
+    out = re.sub(
+        r"^def main\s*\(\)\s*:.*?(?=\n# ---|\Z)",
+        "",
+        out,
+        count=1,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    return out.strip()
+
+
+def wrap_generated_body(body: str, *, summary: str) -> str:
+    """Wrap LLM-generated AC test body with runtime scaffold (v3.0)."""
+    stripped = sanitize_generated_body(body)
+    if not stripped:
+        stripped = "raise AssertionError('Empty script body')"
+    indented = "\n".join(
+        f"    {line}" if line.strip() else "" for line in stripped.splitlines()
+    )
+    safe_summary = summary.replace('"""', "'")
+    return f'''"""Auto-generated acceptance script for: {safe_summary}"""
+{_PRINT_STACKTRACE}
+
+def main():
+{indented}
+    print("All checks passed")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print_stacktrace(e)
+        raise
 '''
 
 
@@ -57,23 +112,5 @@ raise AssertionError("Stub for {ac.observable}")
 def render_minimal_script(spec: StructuredSpecification) -> str:
     must = [ac for ac in spec.acceptance_criteria if ac.priority == "must"]
     stubs = [render_ac_stub(ac) for ac in must]
-    filename = (
-        "reproduce_issue.py"
-        if spec.task_type == TaskType.BUG_FIX
-        else "test_feature.py"
-    )
     body = "\n".join(stubs)
-    return f'''"""Auto-generated acceptance script for: {spec.summary}"""
-{_PRINT_STACKTRACE}
-
-def main():
-{body.replace(chr(10), chr(10) + "    ")}
-    print("All checks passed")
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print_stacktrace(e)
-        raise
-'''
+    return wrap_generated_body(body, summary=spec.summary)

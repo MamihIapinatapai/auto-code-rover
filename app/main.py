@@ -32,7 +32,7 @@ from app.post_process import (
     organize_and_form_input,
     reextract_organize_and_form_inputs,
 )
-from app.raw_tasks import RawGithubTask, RawLocalTask, RawSweTask, RawTask
+from app.raw_tasks import RawDeepSweTask, RawGithubTask, RawLocalTask, RawSweTask, RawTask
 from app.task import SweTask, Task
 
 
@@ -56,6 +56,11 @@ def main():
 
     local_parser = subparsers.add_parser("local-issue", help="Run a local issue.")
     set_local_parser_args(local_parser)
+
+    deepswe_parser = subparsers.add_parser(
+        "deepswe", help="Run one or multiple DeepSWE benchmark tasks"
+    )
+    set_deepswe_parser_args(deepswe_parser)
 
     extract_patches_parser = subparsers.add_parser(
         "extract-patches", help="Only extract patches from the raw results dir"
@@ -126,6 +131,29 @@ def main():
         "yes",
     ):
         config.spec_parser_scope_llm = True
+    from app.spec_parser.pipeline import (  # noqa: PLC0415
+        apply_spec_parser_version,
+        configure_repo_enrichment,
+    )
+
+    if os.environ.get("ACR_SPEC_PARSER_VERSION", "").strip():
+        apply_spec_parser_version(os.environ["ACR_SPEC_PARSER_VERSION"].strip())
+    if getattr(args, "spec_parser_version", None):
+        apply_spec_parser_version(args.spec_parser_version)
+    if getattr(args, "use_v3_prompts", False):
+        config.spec_parser_use_v3_prompts = True
+    if os.environ.get("ACR_SPEC_PARSER_USE_V3_PROMPTS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        config.spec_parser_use_v3_prompts = True
+    if config.enable_spec_parser:
+        configure_repo_enrichment(
+            stop_after="full",
+            no_repo_enrichment=getattr(args, "no_repo_enrichment", False),
+            with_repo_enrichment=getattr(args, "with_repo_enrichment", False),
+        )
 
     subcommand = getattr(args, subparser_dest_attr_name)
     if subcommand == "swe-bench":
@@ -172,6 +200,30 @@ def main():
         )
         groups = {"local": [task]}
         run_task_groups(groups, num_processes)
+    elif subcommand == "deepswe":
+        config.enable_semantic_injection_ver1 = getattr(
+            args, "enable_semantic_injection_ver1", False
+        )
+        config.enable_spec_parser = getattr(args, "enable_spec_parser", False)
+        config.enable_sympy_pipeline_v2 = False
+
+        tasks = make_deepswe_tasks(
+            args.task,
+            args.task_list_file,
+            abspath(args.deepswe_tasks_dir),
+            abspath(args.deepswe_repos_dir),
+        )
+        groups = {"deepswe": tasks}
+        run_task_groups(groups, num_processes, organize_output=False)
+        from app.runner.run_deepswe import collect_patches_from_run
+
+        patches_dir = getattr(args, "deepswe_patches_dir", None)
+        if patches_dir:
+            collect_patches_from_run(
+                config.output_dir,
+                patches_dir,
+                model_name=common.SELECTED_MODEL.name,
+            )
     elif subcommand == "extract-patches":
         extract_organize_and_form_input(args.experiment_dir)
     elif subcommand == "re-extract-patches":
@@ -247,6 +299,65 @@ def set_local_parser_args(parser: ArgumentParser) -> None:
         "--local-repo", type=str, help="Path to a local copy of the target repo."
     )
     parser.add_argument("--issue-file", type=str, help="Path to a local issue file.")
+
+
+def set_deepswe_parser_args(parser: ArgumentParser) -> None:
+    add_task_related_args(parser)
+    parser.add_argument(
+        "--deepswe-tasks-dir",
+        type=str,
+        required=True,
+        help="Path to DeepSWE tasks/ directory (Harbor format).",
+    )
+    parser.add_argument(
+        "--deepswe-repos-dir",
+        type=str,
+        required=True,
+        help="Root directory for repo cache/ and work/ copies.",
+    )
+    parser.add_argument(
+        "--deepswe-patches-dir",
+        type=str,
+        default=None,
+        help="If set, copy final patches to this directory after the run.",
+    )
+    parser.add_argument(
+        "--task-list-file",
+        type=str,
+        help="Path to file listing DeepSWE task ids (one per line).",
+    )
+    parser.add_argument("--task", type=str, help="Single DeepSWE task id to run.")
+
+
+def make_deepswe_tasks(
+    task_id: str | None,
+    task_list_file: str | None,
+    tasks_dir: str,
+    repos_dir: str,
+) -> list[RawDeepSweTask]:
+    if task_id is not None and task_list_file is not None:
+        raise ValueError("Cannot specify both --task and --task-list-file.")
+
+    all_task_ids: list[str] = []
+    if task_list_file is not None:
+        all_task_ids = parse_task_list_file(task_list_file)
+    if task_id is not None:
+        all_task_ids = [task_id]
+    if not all_task_ids:
+        raise ValueError("No DeepSWE task ids to run.")
+
+    tasks_root = Path(tasks_dir)
+    all_tasks: list[RawDeepSweTask] = []
+    for tid in sorted(all_task_ids):
+        task_path = tasks_root / tid
+        if not task_path.is_dir():
+            log.print_with_time(f"Skipping missing DeepSWE task directory: {task_path}")
+            continue
+        all_tasks.append(RawDeepSweTask.from_task_dir(str(task_path), repos_dir))
+
+    if not all_tasks:
+        raise ValueError("No valid DeepSWE tasks found.")
+    return all_tasks
 
 
 def add_task_related_args(parser: ArgumentParser) -> None:
@@ -354,6 +465,28 @@ def add_task_related_args(parser: ArgumentParser) -> None:
         action="store_true",
         default=False,
         help="Enable optional ScopePlan LLM for P2 analysis scope (default: deterministic).",
+    )
+    parser.add_argument(
+        "--spec-parser-version",
+        choices=["2.2.0", "3.0.0"],
+        default=None,
+        help="Spec parser pipeline version (3.0.0 disables P2 by default).",
+    )
+    parser.add_argument(
+        "--no-repo-enrichment",
+        action="store_true",
+        help="Disable P2 static repo enrichment in spec parser.",
+    )
+    parser.add_argument(
+        "--with-repo-enrichment",
+        action="store_true",
+        help="Force-enable P2 static repo enrichment in spec parser.",
+    )
+    parser.add_argument(
+        "--use-v3-prompts",
+        action="store_true",
+        default=False,
+        help="Use v3.0 dual script prompts in spec parser.",
     )
     parser.add_argument(
         "--num-processes",
@@ -545,6 +678,9 @@ def run_raw_task(task: RawTask) -> bool:
     apputils.create_dir_if_not_exists(task_output_dir)
 
     task.dump_meta_data(task_output_dir)
+
+    if isinstance(task, RawDeepSweTask):
+        task.apply_runtime_config()
 
     log.log_and_always_print(
         f"============= Running task {task_id} =============",

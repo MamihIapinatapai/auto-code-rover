@@ -8,6 +8,7 @@ from app.spec_parser.ac_markers import (
     script_preamble,
 )
 from app.spec_parser.calibration_gate import strict_legacy_ok
+from app.spec_parser.grounding import enforceable_co_fix
 from app.spec_parser.schema import (
     CriterionResult,
     ExecutionEvidence,
@@ -38,6 +39,8 @@ def run_per_ac(
     task: Task,
     script_content: str,
     spec: StructuredSpecification,
+    *,
+    issue_text: str = "",
 ) -> ExecutionEvidence:
     must_ids = _must_ac_ids(spec)
     section_map = parse_ac_sections(script_content, must_ids)
@@ -69,7 +72,9 @@ def run_per_ac(
         mini = _wrap_ac_script(preamble, body, ac_id)
         repro = task.execute_reproducer(mini)
         result = build_execution_result(repro)
-        legacy_ok, msg = strict_legacy_ok(spec.task_type, result, mini)
+        legacy_ok, msg = strict_legacy_ok(
+            spec.task_type, result, mini, issue_text=issue_text
+        )
         passed_on_buggy = result.exit_code == 0
         if spec.task_type == TaskType.BUG_FIX:
             passed_on_buggy = result.exit_code == 0
@@ -99,7 +104,7 @@ def run_per_ac(
     )
     uncovered = [
         e
-        for e in spec.fix_scope.co_fix_required
+        for e in enforceable_co_fix(spec, issue_text)
         if e.lower() not in script_content.lower()
     ]
     calib_ok = all_failed and not uncovered and bool(per_criterion)

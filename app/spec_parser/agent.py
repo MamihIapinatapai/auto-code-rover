@@ -20,10 +20,17 @@ from app.spec_parser.parser_prompts import (
     ISSUE_STRUCTURING_SYSTEM_PROMPT,
     format_issue_structuring_user,
 )
+from app.spec_parser.pipeline import (
+    effective_parser_version,
+    is_v3_pipeline,
+    should_run_repo_enrichment,
+)
+from app.spec_parser.repair_draft import build_repair_draft, save_repair_draft
 from app.spec_parser.repo_context import build_repo_context
-from app.spec_parser.schema import StructuredSpecification, TaskType
+from app.spec_parser.schema import StructuredSpecification
 from app.spec_parser.script_generator import ScriptGenerator
 from app.spec_parser.script_prompts import format_feedback
+from app.spec_parser.script_prompts_v3 import format_feedback_v3
 from app.spec_parser.sandbox_executor import SandboxExecutor
 from app.spec_parser.validators import (
     extract_failure_anchor,
@@ -50,14 +57,15 @@ class SpecParsingAgent:
         stop_after: StopAfter = "full",
         use_llm_for_script: bool = True,
     ) -> StructuredSpecification:
+        v3 = is_v3_pipeline()
         repo_ctx = build_repo_context(self.task)
         draft, extract_thread = self._extract_and_structure(issue_text, repo_ctx)
         draft = contract_refiner.refine(draft, issue_text)
-        draft.parser_version = "2.2.0"
+        draft.parser_version = effective_parser_version()
         save_thread(self.output_dir, extract_thread, "extract")
 
         enrichment = None
-        if config.spec_parser_enable_repo_enrichment:
+        if should_run_repo_enrichment(stop_after):
             enrichment, resolution = repo_enrichment.run(
                 self.task, issue_text, repo_ctx, draft, self.output_dir
             )
@@ -68,7 +76,14 @@ class SpecParsingAgent:
                 self.output_dir / SharedMemoryStore.TARGET_RESOLUTION_FILENAME
             ).write_text(resolution.model_dump_json(indent=2))
 
-        spec = spec_refiner.merge(draft, enrichment)
+        if v3:
+            if config.spec_parser_use_repair_draft:
+                save_repair_draft(
+                    self.output_dir, build_repair_draft(draft, issue_text)
+                )
+            spec = spec_refiner.merge_v3(draft)
+        else:
+            spec = spec_refiner.merge(draft, enrichment)
         if stop_after == "enrich":
             self._persist(spec, issue_text)
             return spec
@@ -79,6 +94,7 @@ class SpecParsingAgent:
             script, gen_thread = self.script_generator.generate(
                 spec,
                 repo_ctx,
+                issue_text=issue_text,
                 feedback=feedback,
                 round_no=rnd,
                 use_llm=use_llm_for_script,
@@ -94,33 +110,47 @@ class SpecParsingAgent:
             if config.spec_parser_script_preflight:
                 from app.spec_parser.script_linter import lint_feedback, preflight
 
-                lint_report = preflight(spec, script.content)
+                lint_report = preflight(spec, script.content, issue_text=issue_text)
                 (self.output_dir / f"script_lint_round_{rnd}.json").write_text(
                     lint_report.model_dump_json(indent=2)
                 )
                 if not lint_report.passed:
-                    feedback = format_feedback(
-                        round_no=rnd,
-                        exit_code=None,
-                        validation_reason=lint_feedback(lint_report),
-                        failed_criteria_ids=lint_report.missing_ac_ids,
-                        uncovered_co_fix=list(spec.fix_scope.co_fix_required),
-                        stderr_truncated="",
-                    )
+                    if config.spec_parser_use_v3_prompts:
+                        feedback = format_feedback_v3(
+                            task_type=spec.task_type,
+                            round_no=rnd,
+                            stage="preflight",
+                            validation_reason=lint_feedback(lint_report),
+                            failed_criteria_ids=lint_report.missing_ac_ids,
+                            stderr_truncated="",
+                        )
+                    else:
+                        feedback = format_feedback(
+                            round_no=rnd,
+                            exit_code=None,
+                            validation_reason=lint_feedback(lint_report),
+                            failed_criteria_ids=lint_report.missing_ac_ids,
+                            uncovered_co_fix=list(spec.fix_scope.co_fix_required),
+                            stderr_truncated="",
+                        )
                     logger.info("Spec parser preflight round {} failed", rnd)
                     continue
 
             if config.spec_parser_ac_isolated_run:
                 evidence = self.sandbox.execute_per_ac(
-                    script.content, spec, lint_report=lint_report
+                    script.content, spec, lint_report=lint_report, issue_text=issue_text
                 )
             else:
                 evidence = self.sandbox.execute_with_ac_breakdown(
-                    script.content, spec, enable_trace=True, lint_report=lint_report
+                    script.content,
+                    spec,
+                    enable_trace=True,
+                    lint_report=lint_report,
+                    issue_text=issue_text,
                 )
             spec.execution_evidence = evidence
             passed, reason, failed_ac, uncovered = validate_ac_calibration(
-                spec, evidence, script.content, lint_report
+                spec, evidence, script.content, lint_report, issue_text=issue_text
             )
             spec.repro_script = script.with_calibration(
                 passed=passed,
@@ -135,21 +165,37 @@ class SpecParsingAgent:
                     spec.repro_script.stderr_excerpt, spec
                 )
                 break
-            feedback = format_feedback(
-                round_no=rnd,
-                exit_code=evidence.overall_exit_code,
-                validation_reason=reason,
-                failed_criteria_ids=failed_ac,
-                uncovered_co_fix=uncovered,
-                stderr_truncated=spec.repro_script.stderr_excerpt,
-            )
+            reason_full = reason
+            if uncovered:
+                reason_full = f"{reason}; uncovered co_fix: {uncovered}"
+            if config.spec_parser_use_v3_prompts:
+                feedback = format_feedback_v3(
+                    task_type=spec.task_type,
+                    round_no=rnd,
+                    stage="gate",
+                    validation_reason=reason_full,
+                    failed_criteria_ids=failed_ac,
+                    stderr_truncated=spec.repro_script.stderr_excerpt,
+                )
+            else:
+                feedback = format_feedback(
+                    round_no=rnd,
+                    exit_code=evidence.overall_exit_code,
+                    validation_reason=reason,
+                    failed_criteria_ids=failed_ac,
+                    uncovered_co_fix=uncovered,
+                    stderr_truncated=spec.repro_script.stderr_excerpt,
+                )
             logger.info("Spec parser calibration round {} failed: {}", rnd, reason)
 
         if stop_after == "calibration":
             self._persist(spec, issue_text)
             return spec
 
-        spec = evidence_fusion.merge(spec, enrichment, spec.execution_evidence)
+        if v3:
+            spec = evidence_fusion.merge_v3(spec, spec.execution_evidence)
+        else:
+            spec = evidence_fusion.merge(spec, enrichment, spec.execution_evidence)
         self._persist(spec, issue_text)
         return spec
 

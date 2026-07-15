@@ -20,6 +20,9 @@ enable_validation: bool = False
 # E1 ablation: only use search_code (no AST APIs)
 enable_text_only_search: bool = False
 
+# DeepSWE: primary language of the current task (python, typescript, go, ...)
+task_language: str | None = None
+
 # whether to do angelic debugging
 enable_angelic: bool = False
 
@@ -79,6 +82,13 @@ spec_parser_max_co_fix: int = 8
 spec_parser_require_class_in_index_for_issue_class: bool = True
 spec_parser_require_primary_class_in_scope: bool = True
 spec_parser_search_context_max_snippet_chars: int = 400
+
+# v3.0 pipeline (M16+; default remains v2.2 until M20)
+spec_parser_version: str = "2.2.0"
+spec_parser_use_repair_draft: bool = True
+
+# v3.0 script generation prompts (M17)
+spec_parser_use_v3_prompts: bool = False
 
 # timeout for test cmd execution, currently set to 5 min
 test_exec_timeout: int = 300

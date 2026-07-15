@@ -6,6 +6,7 @@ import re
 
 from app import config
 from app.spec_parser.ac_markers import parse_ac_sections
+from app.spec_parser.grounding import enforceable_co_fix, enforceable_prerequisite
 from app.spec_parser.schema import ScriptLintReport, StructuredSpecification, TaskType
 
 
@@ -20,7 +21,12 @@ def _section_text(script: str, ac_id: str, section_map) -> str:
     return body or ""
 
 
-def preflight(spec: StructuredSpecification, script: str) -> ScriptLintReport:
+def preflight(
+    spec: StructuredSpecification,
+    script: str,
+    *,
+    issue_text: str = "",
+) -> ScriptLintReport:
     """Run static lint rules before sandbox execution."""
     must = _must_ids(spec)
     section_map = parse_ac_sections(script, must)
@@ -30,14 +36,21 @@ def preflight(spec: StructuredSpecification, script: str) -> ScriptLintReport:
     if section_map.missing:
         blocking.append("L1-MISSING-AC")
 
-    for entity in spec.fix_scope.co_fix_required:
+    for entity in enforceable_co_fix(spec, issue_text):
         if entity.lower() not in script.lower():
             blocking.append("L2-COFIX-COVERAGE")
+        elif _co_fix_lacks_executable_assert(script, entity, section_map):
+            blocking.append("L2-COFIX-WEAK")
+
+    if getattr(config, "spec_parser_use_v3_prompts", False) and _has_existence_only_ac(
+        script, section_map
+    ):
+        blocking.append("L10-EXISTENCE-ONLY")
 
     if _has_weak_sinc_only(script, spec):
         blocking.append("L3-WEAK-ASSERT-SINC")
 
-    if _missing_prerequisite_probe(script, spec):
+    if _missing_prerequisite_probe(script, spec, issue_text=issue_text):
         blocking.append("L3-WEAK-ASSERT-PREREQ")
 
     if _uses_numpy_lambdify(script):
@@ -74,6 +87,39 @@ def lint_feedback(report: ScriptLintReport) -> str:
     return "; ".join(parts)
 
 
+def _co_fix_lacks_executable_assert(script: str, entity: str, section_map) -> bool:
+    """co_fix name appears but no AC section containing it has assert/raise."""
+    el = entity.lower()
+    if el not in script.lower():
+        return False
+    for ac_id in section_map.found:
+        body = _section_text(script, ac_id, section_map)
+        if el not in body.lower():
+            continue
+        if re.search(r"\bassert\b|\braise\b", body):
+            return False
+    return True
+
+
+def _has_existence_only_ac(script: str, section_map) -> bool:
+    for ac_id in section_map.found:
+        body = _section_text(script, ac_id, section_map)
+        if not body:
+            continue
+        has_existence = bool(re.search(r"\bhasattr\s*\(|\bcallable\s*\(", body))
+        has_behavior = bool(
+            re.search(r"\bassert\b", body)
+            and not re.fullmatch(
+                r"\s*assert\s+hasattr\s*\([^)]+\)\s*",
+                body.strip(),
+                re.DOTALL,
+            )
+        )
+        if has_existence and not has_behavior:
+            return True
+    return False
+
+
 def _has_weak_sinc_only(script: str, spec: StructuredSpecification) -> bool:
     blob = " ".join(spec.repair_goals + spec.symptom_goals).lower()
     needs_sinc = "sinc" in blob or any(
@@ -98,8 +144,13 @@ def _has_weak_sinc_only(script: str, spec: StructuredSpecification) -> bool:
     return bool(weak and not strong)
 
 
-def _missing_prerequisite_probe(script: str, spec: StructuredSpecification) -> bool:
-    for prereq in spec.fix_scope.prerequisite:
+def _missing_prerequisite_probe(
+    script: str,
+    spec: StructuredSpecification,
+    *,
+    issue_text: str = "",
+) -> bool:
+    for prereq in enforceable_prerequisite(spec, issue_text):
         pl = prereq.lower()
         if "relational" in pl or "_print_relational" in pl:
             if not any(

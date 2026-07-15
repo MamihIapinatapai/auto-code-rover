@@ -47,6 +47,25 @@ SELECT_PROMPT = (
     "\n\nNow analyze the issue and select necessary APIs to get more context of the project. Each API call must have concrete arguments as inputs."
 )
 
+TEXT_ONLY_SELECT_PROMPT = (
+    "Based on the issue, use text search APIs to gather code context from this codebase."
+    "\n- search_code(code_str: str): Search for a code snippet in the entire codebase."
+    "\n- search_code_in_file(code_str: str, file_path: str): Search for a code snippet in a given file."
+    "\n- get_code_around_line(file_path: str, line_number: int, window_size: int): Get the code around a given line number in a file."
+    "\n\nYou must give correct number of arguments when invoking API calls."
+    "\n\nNote that you can use multiple search APIs in one round."
+    "\n\nNow analyze the issue and select necessary APIs to get more context of the project. Each API call must have concrete arguments as inputs."
+)
+
+
+def get_select_prompt() -> str:
+    if config.enable_text_only_search:
+        return TEXT_ONLY_SELECT_PROMPT
+    lang = config.task_language
+    if lang is not None and lang != "python":
+        return TEXT_ONLY_SELECT_PROMPT
+    return SELECT_PROMPT
+
 
 ANALYZE_PROMPT = (
     "Let's analyze collected context first.\n"
@@ -179,8 +198,8 @@ def generator(
             )
             logger.info("{} injected repair contract from SWM", ACR_LOG_PREFIX)
 
-    msg_thread.add_user(SELECT_PROMPT)
-    print_acr(SELECT_PROMPT, "context retrieval initial prompt")
+    msg_thread.add_user(get_select_prompt())
+    print_acr(get_select_prompt(), "context retrieval initial prompt")
 
     localization_rewrite_pending = False
 

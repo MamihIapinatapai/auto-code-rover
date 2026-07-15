@@ -7,6 +7,24 @@ MODEL="${SPEC_PARSER_MODEL:-litellm-generic-deepseek/deepseek-chat}"
 SETUP_MAP="${SETUP_MAP:-/opt/SWE-bench/setup_result/setup_map.json}"
 TASKS_MAP="${TASKS_MAP:-/opt/SWE-bench/setup_result/tasks_map.json}"
 STOP_AFTER="${STOP_AFTER:-full}"
+USE_V3_PROMPTS="${USE_V3_PROMPTS:-0}"
+SPEC_PARSER_VERSION="${SPEC_PARSER_VERSION:-}"
+NO_REPO_ENRICHMENT="${NO_REPO_ENRICHMENT:-0}"
+WITH_REPO_ENRICHMENT="${WITH_REPO_ENRICHMENT:-0}"
+V3_FLAG=""
+if [[ "$USE_V3_PROMPTS" == "1" || "$USE_V3_PROMPTS" == "true" || "$USE_V3_PROMPTS" == "yes" ]]; then
+  V3_FLAG="--use-v3-prompts"
+fi
+VERSION_FLAG=""
+if [[ -n "$SPEC_PARSER_VERSION" ]]; then
+  VERSION_FLAG="--spec-parser-version $SPEC_PARSER_VERSION"
+fi
+P2_FLAG=""
+if [[ "$NO_REPO_ENRICHMENT" == "1" || "$NO_REPO_ENRICHMENT" == "true" || "$NO_REPO_ENRICHMENT" == "yes" ]]; then
+  P2_FLAG="--no-repo-enrichment"
+elif [[ "$WITH_REPO_ENRICHMENT" == "1" || "$WITH_REPO_ENRICHMENT" == "true" || "$WITH_REPO_ENRICHMENT" == "yes" ]]; then
+  P2_FLAG="--with-repo-enrichment"
+fi
 
 mkdir -p "$ROOT/$PROBE_DIR"
 RUN_CMD="cd /workspace/acr && export ACR_SYMPY_PIPELINE_V2=0 && export PYTHONPATH=/workspace/acr"
@@ -22,7 +40,8 @@ while IFS= read -r INSTANCE || [[ -n "$INSTANCE" ]]; do
       --setup-map '$SETUP_MAP' \
       --tasks-map '$TASKS_MAP' \
       --model '$MODEL' \
-      --stop-after '$STOP_AFTER'
+      --stop-after '$STOP_AFTER' \
+      $V3_FLAG $VERSION_FLAG $P2_FLAG
   " 2>&1 | tee "$ROOT/$PROBE_DIR/${INSTANCE}_run.log"
   RUN_EXIT=$?
   set -e

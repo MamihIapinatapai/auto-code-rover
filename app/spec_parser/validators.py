@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 
-from app import config
+from app.spec_parser.grounding import enforceable_co_fix
 from app.spec_parser.ac_markers import ac_ids_in_script, parse_ac_sections
 from app.spec_parser.calibration_gate import (
     CalibrationVerdict,
+    classify_stderr_script_error,
     evaluate_calibration,
     strict_legacy_ok,
 )
@@ -41,9 +42,13 @@ def validate_ac_calibration(
     evidence: ExecutionEvidence,
     script_content: str,
     lint_report: ScriptLintReport | None = None,
+    *,
+    issue_text: str = "",
 ) -> tuple[bool, str, list[str], list[str]]:
     """Return passed, feedback, failed_ac_ids, uncovered_co_fix."""
-    verdict = evaluate_calibration(spec, evidence, script_content, lint_report)
+    verdict = evaluate_calibration(
+        spec, evidence, script_content, lint_report, issue_text=issue_text
+    )
     return (
         verdict.passed,
         verdict.reason,
@@ -91,19 +96,18 @@ def build_execution_evidence_from_result(
     spec: StructuredSpecification,
     result: SandboxExecutionResult,
     script_content: str,
+    *,
+    issue_text: str = "",
 ) -> ExecutionEvidence:
     stderr = result.stderr
-    if "ImportError" in stderr:
+    is_err, err_reason = classify_stderr_script_error(
+        spec.task_type, stderr, script_content, issue_text=issue_text
+    )
+    if is_err:
+        label = err_reason.split()[0]
         return ExecutionEvidence(
             calibration_passed=False,
-            calibration_error="ImportError",
-            overall_exit_code=result.exit_code,
-            execution_mode="holistic",
-        )
-    if "SyntaxError" in stderr:
-        return ExecutionEvidence(
-            calibration_passed=False,
-            calibration_error="SyntaxError",
+            calibration_error=label,
             overall_exit_code=result.exit_code,
             execution_mode="holistic",
         )
@@ -132,10 +136,11 @@ def build_execution_evidence_from_result(
         spec.task_type,
         result,
         script_content,
+        issue_text=issue_text,
     )
     uncovered = [
         e
-        for e in spec.fix_scope.co_fix_required
+        for e in enforceable_co_fix(spec, issue_text)
         if e.lower() not in script_content.lower()
     ]
     calib_ok = legacy_ok and not uncovered

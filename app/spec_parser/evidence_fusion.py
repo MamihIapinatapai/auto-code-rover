@@ -10,6 +10,14 @@ from app.spec_parser.schema import (
 )
 
 
+def merge_v3(
+    spec: StructuredSpecification,
+    evidence: ExecutionEvidence | None,
+) -> StructuredSpecification:
+    """P6 fusion for v3: dynamic evidence + P1 contract only."""
+    return merge(spec, None, evidence)
+
+
 def merge(
     spec: StructuredSpecification,
     enrichment: RepoEnrichment | None,
