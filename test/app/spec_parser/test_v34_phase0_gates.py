@@ -168,6 +168,8 @@ def test_v6_scc08_recipe_source():
     issue = "Use name_mapping in Retort recipe"
     contract = {"items": [_good_adaptix_item(issue)]}
     script = render_s1_script(contract, recipe_cards=load_recipe_cards())
+    if hasattr(script, "script"):
+        script = script.script or ""
     # corrupt recipe patterns out
     bad = script.replace("Retort", "Provider").replace("recipe", "xx")
     # Ensure call_graph symbols still present somehow

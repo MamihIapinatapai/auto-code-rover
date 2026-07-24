@@ -205,9 +205,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--spec-parser-version",
-        choices=["2.2.0", "3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.3.1", "3.4.0"],
+        choices=["2.2.0", "3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.3.1", "3.4.0", "3.5.0"],
         default=None,
-        help="Pipeline version: 3.x disables P2; 3.3 chains; 3.3.1 ScriptAnchor; 3.4.0 Contract-First.",
+        help="Pipeline version: 3.x disables P2; 3.4 Contract-First; 3.5 UsageMiner+RealRenderer+EG.",
     )
     parser.add_argument(
         "--use-v3-prompts",

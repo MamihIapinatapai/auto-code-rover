@@ -5,5 +5,20 @@
   "forbidden_patterns": ["Model(field_options="],
   "hint": "Use dataclasses.field(metadata=field_options(...))",
   "call_graph_template": ["field", "field_options"],
-  "blocking": true
+  "blocking": true,
+  "emit_template": {
+    "imports": [
+      "from dataclasses import dataclass, field",
+      "from mashumaro import field_options",
+      "from mashumaro.mixins.dict import DataClassDictMixin"
+    ],
+    "arrange": [
+      "@dataclass\nclass __SLOT_model__(DataClassDictMixin):\n    __SLOT_field_name__: object = field(metadata=field_options(**__SLOT_field_options_kwargs__))\n"
+    ],
+    "call_expr": "__SLOT_model__.from_dict(__SLOT_data__)",
+    "slots_from_inputs": ["model", "field_name", "field_options_kwargs", "data"],
+    "slot_aliases": {"payload": "data", "options": "field_options_kwargs"},
+    "result_name": "result",
+    "needs_await": false
+  }
 }

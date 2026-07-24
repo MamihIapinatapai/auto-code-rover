@@ -158,6 +158,26 @@ spec_parser_recipe_cards_path: str = "app/spec_parser/recipe_cards"
 spec_parser_draft_score_version: str = "v34"
 spec_parser_feature_module_name_hints: list[str] = []
 
+# v3.5.0 Real Renderer / UsageMiner / FailureSemantics / PersistGuard (design §9)
+spec_parser_enable_usage_miner: bool = True
+spec_parser_usage_mine_tests_call_shape: bool = True
+spec_parser_usage_mine_budget_files: int = 80
+spec_parser_usage_snippet_topk_per_api: int = 3
+spec_parser_forbid_renderer_stub: bool = True
+spec_parser_enable_failure_semantics_check: bool = True
+spec_parser_enable_failure_provenance: bool = True
+spec_parser_forbid_bare_raises_exception: bool = True
+spec_parser_renderer_scheme: str = "A"
+spec_parser_renderer_all_or_nothing: bool = True
+spec_parser_enable_bind_mode_signature: bool = False
+spec_parser_slot_placeholder_format: str = "__SLOT_{key}__"
+spec_parser_s1_require_exec_gate: bool = True
+spec_parser_allow_contract_only: bool = True
+spec_parser_free_fallback_on_contract_fail: bool = True
+spec_parser_persist_rejected_scripts: bool = True
+spec_parser_official_script_only: bool = True
+spec_parser_contract_json_repair_rounds: int = 2
+
 # timeout for test cmd execution, currently set to 5 min
 test_exec_timeout: int = 300
 

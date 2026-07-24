@@ -18,7 +18,7 @@ from app.spec_parser.behavior_contract import (
     sanitize_contract_for_mvp,
     validate_contract,
 )
-from app.spec_parser.behavior_skeleton import render_s1_script
+from app.spec_parser.behavior_skeleton import RenderResult, render_s1_script
 from app.spec_parser.contract_fill_prompts import (
     CONTRACT_FILL_SYSTEM,
     format_contract_fill_user,
@@ -39,6 +39,23 @@ from app.spec_parser.contract_llm_review import (
 )
 from app.spec_parser.script_contract_align import run_scc_llm, run_scc_machine
 from app.spec_parser.table_gen_feedback import apply_items_patch, empty_feedback, merge_feedback
+from app.spec_parser.usage_miner import format_usage_for_prompt, mine_usage
+
+
+def _safe_render(
+    contract: dict[str, Any],
+    cards: dict,
+    usage_snippets: dict | list | None = None,
+) -> tuple[str, str | None]:
+    """Return (script, reason_code). reason_code set when render blocked."""
+    res = render_s1_script(
+        contract, recipe_cards=cards, usage_snippets=usage_snippets
+    )
+    if isinstance(res, RenderResult):
+        if not res.ok:
+            return "", res.reason_code or "render_blocked"
+        return res.script or "", None
+    return str(res or ""), None
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -170,6 +187,7 @@ def run_contract_pipeline(
     use_llm: bool = True,
     issue_kind: str = "FEATURE",
     task_id: str = "",
+    project_path: str = "",
 ) -> dict[str, Any]:
     """Execute S_FILL → S_BC → (LLM review) → S_RENDER → S_SCC_M → (SCC-L).
 
@@ -180,6 +198,40 @@ def run_contract_pipeline(
     budget = int(getattr(config, "spec_parser_contract_max_expect_retries", 2) or 2)
     rerender_budget = 1
     last_table_review: dict[str, Any] | None = None
+    usage_snippets: dict[str, Any] = {
+        "snippets": [],
+        "sufficiency": "insufficient",
+        "summary_for_prompt": "(none)",
+    }
+    if getattr(config, "spec_parser_enable_usage_miner", False):
+        try:
+            repo_guess = Path(project_path) if project_path else output_dir
+            if not project_path:
+                for _ in range(4):
+                    if (repo_guess / "pyproject.toml").exists() or (
+                        repo_guess / "setup.py"
+                    ).exists():
+                        break
+                    if repo_guess.parent == repo_guess:
+                        break
+                    repo_guess = repo_guess.parent
+            usage_snippets = mine_usage(
+                repo_guess,
+                issue_text,
+                recipe_cards=cards,
+                budget_files=int(
+                    getattr(config, "spec_parser_usage_mine_budget_files", 80) or 80
+                ),
+                allow_tests=bool(
+                    getattr(config, "spec_parser_usage_mine_tests_call_shape", True)
+                ),
+            )
+            (output_dir / "usage_snippets.json").write_text(
+                json.dumps(usage_snippets, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("usage_miner failed: {}", e)
 
     if decision:
         decision.record(
@@ -267,10 +319,21 @@ def run_contract_pipeline(
                         "budget_left": budget,
                     }
                 # fall through to render with fallback contract
-                script = render_s1_script(contract, recipe_cards=cards)
+                script, _render_err = _safe_render(contract, cards, usage_snippets)
                 (output_dir / "behavior_contract.json").write_text(
                     json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
+                if _render_err or not script:
+                    return {
+                        "ok": False,
+                        "contract": contract,
+                        "script": "",
+                        "reason": f"render_blocked:{_render_err or 'empty'}",
+                        "bc_validate": bc,
+                        "scc": None,
+                        "budget_left": budget,
+                        "render_blocked": True,
+                    }
                 (output_dir / "test_feature.py").write_text(script, encoding="utf-8")
                 return {
                     "ok": True,
@@ -401,7 +464,32 @@ def run_contract_pipeline(
                     )
                 continue
 
-        script = render_s1_script(contract, recipe_cards=cards)
+        script, _render_err = _safe_render(contract, cards, usage_snippets)
+        if _render_err or not script.strip():
+            (output_dir / "behavior_contract.json").write_text(
+                json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            if decision:
+                decision.record(
+                    node_id="D_contract_render",
+                    round_no=attempt,
+                    options=["ok", "error"],
+                    decision="error",
+                    reason=_render_err or "empty",
+                    policy_id="render_s1_v35",
+                    action="render_blocked",
+                )
+            return {
+                "ok": False,
+                "contract": contract,
+                "script": "",
+                "reason": f"render_blocked:{_render_err or 'empty'}",
+                "bc_validate": bc,
+                "scc": None,
+                "budget_left": budget,
+                "render_blocked": True,
+                "usage_snippets": usage_snippets,
+            }
         if decision:
             decision.record(
                 node_id="D_contract_render",
@@ -409,7 +497,7 @@ def run_contract_pipeline(
                 options=["ok", "error"],
                 decision="ok",
                 reason=f"bytes={len(script)}",
-                policy_id="render_s1_v34",
+                policy_id="render_s1_v35",
                 action="lint_scc",
             )
 
@@ -422,7 +510,7 @@ def run_contract_pipeline(
                     for it in contract.get("items") or []:
                         if it.get("layer") == "async":
                             it["needs_async_harness"] = True
-                    script = render_s1_script(contract, recipe_cards=cards)
+                    script, _render_err = _safe_render(contract, cards, usage_snippets)
                     dsl = check_dsl_rules(script, contract=contract, issue_text=issue_text)
                 if not dsl["passed"] and budget > 0:
                     budget -= 1
@@ -449,7 +537,7 @@ def run_contract_pipeline(
             if scc.get("blocking"):
                 if scc.get("verdict") == "render_error" and rerender_budget > 0:
                     rerender_budget -= 1
-                    script = render_s1_script(contract, recipe_cards=cards)
+                    script, _render_err = _safe_render(contract, cards, usage_snippets)
                     scc = run_scc_machine(contract, script, issue_text=issue_text)
                     if scc.get("scc_m_pass"):
                         # fall through to SCC-L below
@@ -496,7 +584,7 @@ def run_contract_pipeline(
                             )
                             budget -= 1
                             continue
-                        script = render_s1_script(contract, recipe_cards=cards)
+                        script, _render_err = _safe_render(contract, cards, usage_snippets)
                         scc = run_scc_machine(contract, script, issue_text=issue_text)
                         if not scc.get("scc_m_pass"):
                             if budget <= 0:
@@ -553,7 +641,7 @@ def run_contract_pipeline(
                         )
                         budget -= 1
                         continue
-                    script = render_s1_script(contract, recipe_cards=cards)
+                    script, _render_err = _safe_render(contract, cards, usage_snippets)
                     scc = run_scc_machine(contract, script, issue_text=issue_text)
                     if not scc.get("scc_m_pass"):
                         budget -= 1
@@ -637,7 +725,7 @@ def run_contract_pipeline(
                         continue
                     if scc_l.get("verdict") == "render_error" and rerender_budget > 0:
                         rerender_budget -= 1
-                        script = render_s1_script(contract, recipe_cards=cards)
+                        script, _render_err = _safe_render(contract, cards, usage_snippets)
                         continue
                     # non-patchable blocking → accept with warning marker
                     scc["scc_l_pass"] = False

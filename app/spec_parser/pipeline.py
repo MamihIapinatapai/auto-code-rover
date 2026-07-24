@@ -5,7 +5,7 @@ from __future__ import annotations
 from app import config
 
 V2_PARSER_VERSION = "2.2.0"
-V3_PARSER_VERSION = "3.4.0"
+V3_PARSER_VERSION = "3.5.0"
 
 
 def _enable_v34_defaults() -> None:
@@ -30,6 +30,24 @@ def _enable_v34_defaults() -> None:
     config.spec_parser_delete_script_on_no_script = True
     config.spec_parser_s1_require_entrypoint_for_cli_web = True
     config.spec_parser_draft_score_version = "v34"
+
+
+def _enable_v35_defaults() -> None:
+    """3.5.0: UsageMiner + Real Renderer + EG + honest s1 (build on 3.4)."""
+    _enable_v34_defaults()
+    config.spec_parser_enable_usage_miner = True
+    config.spec_parser_usage_mine_tests_call_shape = True
+    config.spec_parser_forbid_renderer_stub = True
+    config.spec_parser_enable_failure_semantics_check = True
+    config.spec_parser_enable_failure_provenance = True
+    config.spec_parser_s1_require_exec_gate = True
+    config.spec_parser_allow_contract_only = True
+    config.spec_parser_renderer_scheme = "A"
+    config.spec_parser_enable_bind_mode_signature = False
+    config.spec_parser_free_fallback_on_contract_fail = True
+    config.spec_parser_enable_contract_llm_review = False
+    config.spec_parser_enable_script_contract_llm = False
+    config.spec_parser_draft_score_version = "v35"
 
 
 def is_v3_pipeline() -> bool:
@@ -85,8 +103,13 @@ def apply_spec_parser_version(version: str | None) -> None:
     if version.startswith("3"):
         config.spec_parser_use_v3_prompts = True
 
-    # Order matters: 3.4 before 3.3.1 before bare 3.3 (startswith)
-    if version.startswith("3.4") or version == "3.4.0":
+    # Order matters: 3.5 before 3.4 before 3.3.1 before bare 3.3 (startswith)
+    if version.startswith("3.5") or version == "3.5.0":
+        _enable_v33_chains()
+        config.spec_parser_enable_script_anchor = True
+        config.spec_parser_enable_script_anchor_tier2 = True
+        _enable_v35_defaults()
+    elif version.startswith("3.4") or version == "3.4.0":
         _enable_v33_chains()
         config.spec_parser_enable_script_anchor = True
         config.spec_parser_enable_script_anchor_tier2 = True

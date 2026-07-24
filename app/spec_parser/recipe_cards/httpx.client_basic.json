@@ -5,5 +5,14 @@
   "forbidden_patterns": ["hasattr(aiter"],
   "hint": "Use httpx client call patterns, not existence-only aiter checks",
   "call_graph_template": ["httpx", "Client"],
-  "blocking": false
+  "blocking": false,
+  "emit_template": {
+    "imports": ["import httpx"],
+    "arrange": [],
+    "call_expr": "httpx.Client().request(__SLOT_method__, __SLOT_url__, **__SLOT_request_kwargs__)",
+    "slots_from_inputs": ["method", "url", "request_kwargs"],
+    "slot_aliases": {"path": "url", "kwargs": "request_kwargs"},
+    "result_name": "result",
+    "needs_await": false
+  }
 }

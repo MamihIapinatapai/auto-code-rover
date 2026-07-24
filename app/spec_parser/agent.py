@@ -242,6 +242,7 @@ class SpecParsingAgent:
         candidates: list[DraftMetrics] = []
         round_history: list[dict] = []
         early_stopped = False
+        free_fallback_used = False
 
         # --- v3.3.1 ScriptAnchor Tier1 (B1: independent of repo_enrichment) ---
         script_anchor: ScriptAnchor | None = None
@@ -393,6 +394,7 @@ class SpecParsingAgent:
                                 getattr(spec.task_type, "value", spec.task_type)
                             ),
                             task_id=getattr(self.task, "task_id", "") or "",
+                            project_path=getattr(self.task, "project_path", "") or "",
                         )
                         if cp.get("ok") and cp.get("script"):
                             from app.spec_parser.schema import ReproScriptArtifact
@@ -514,32 +516,98 @@ class SpecParsingAgent:
                                     action="calib_pass",
                                 )
                                 break
-                            # Accept degraded S1 script even if not calib (O1) when forbid_no_script
+                            # v3.5: s1_accept only if Executableity Gate passes (no stub)
+                            eg_ok = True
                             if getattr(
-                                config, "spec_parser_forbid_no_script_if_s1_ok", True
-                            ) and (cp.get("contract") or {}).get("items"):
+                                config, "spec_parser_s1_require_exec_gate", True
+                            ):
+                                from app.spec_parser.failure_semantics import (
+                                    check_failure_semantics,
+                                )
+
+                                eg = check_failure_semantics(script_content)
+                                eg_ok = eg.ok
+                            if (
+                                eg_ok
+                                and getattr(
+                                    config,
+                                    "spec_parser_forbid_no_script_if_s1_ok",
+                                    True,
+                                )
+                                and (cp.get("contract") or {}).get("items")
+                            ):
                                 decision.record(
                                     node_id="D_pick_draft",
                                     round_no=rnd,
                                     options=["s1_accept", "no_script"],
                                     decision="s1_accept",
-                                    reason="degraded_or_uncalib_s1_kept",
-                                    policy_id="s1_accept_v34",
+                                    reason="eg_pass_uncalib_s1",
+                                    policy_id="s1_accept_v35",
                                     action="s1_accept",
                                 )
-                                # keep script; finalize later as s1 path
                                 early_stopped = False
                                 break
-                        # contract path failed → no_script
-                        decision.record(
-                            node_id="D_early_stop",
-                            round_no=rnd,
-                            options=["continue", "no_script"],
-                            decision="no_script",
-                            reason=cp.get("reason") or "contract_path_failed",
-                            policy_id="contract_fail_v34",
-                            action="no_script",
-                        )
+                            # EG failed or no accept → do not keep fake S1
+                            if not eg_ok:
+                                tf = self.output_dir / "test_feature.py"
+                                if tf.exists() and getattr(
+                                    config,
+                                    "spec_parser_persist_rejected_scripts",
+                                    True,
+                                ):
+                                    rej = self.output_dir / "artifacts" / "rejected"
+                                    rej.mkdir(parents=True, exist_ok=True)
+                                    (rej / f"r{rnd}_test_feature.py").write_text(
+                                        script_content, encoding="utf-8"
+                                    )
+                                    tf.unlink(missing_ok=True)
+                                decision.record(
+                                    node_id="D_pick_draft",
+                                    round_no=rnd,
+                                    options=["s1_accept", "contract_only", "no_script"],
+                                    decision="contract_only"
+                                    if getattr(
+                                        config, "spec_parser_allow_contract_only", True
+                                    )
+                                    else "no_script",
+                                    reason="eg_reject_after_contract_render",
+                                    policy_id="s1_accept_v35",
+                                    action="contract_only"
+                                    if getattr(
+                                        config, "spec_parser_allow_contract_only", True
+                                    )
+                                    else "no_script",
+                                )
+                                early_stopped = True
+                                break
+                        # contract path failed
+                        reason = cp.get("reason") or "contract_path_failed"
+                        allow_co = getattr(
+                            config, "spec_parser_allow_contract_only", True
+                        ) and bool((cp.get("contract") or {}).get("items"))
+                        if allow_co and (
+                            cp.get("render_blocked")
+                            or str(reason).startswith("render_blocked")
+                        ):
+                            decision.record(
+                                node_id="D_early_stop",
+                                round_no=rnd,
+                                options=["continue", "contract_only", "no_script"],
+                                decision="contract_only",
+                                reason=reason,
+                                policy_id="contract_only_v35",
+                                action="contract_only",
+                            )
+                        else:
+                            decision.record(
+                                node_id="D_early_stop",
+                                round_no=rnd,
+                                options=["continue", "no_script"],
+                                decision="no_script",
+                                reason=reason,
+                                policy_id="contract_fail_v34",
+                                action="no_script",
+                            )
                         early_stopped = True
                         break
 
@@ -785,14 +853,36 @@ class SpecParsingAgent:
 
         # Best-of / early-stop finalization
         if early_stopped:
-            decision.set_final(final_action="no_script", selected_draft_id="")
-            if spec.repro_script is not None:
-                spec.repro_script = spec.repro_script.with_calibration(
-                    passed=False,
-                    round_no=spec.repro_script.calibration_round or 0,
-                    exit_code=spec.repro_script.exit_code,
-                    stderr_excerpt=spec.repro_script.stderr_excerpt or "",
-                )
+            last_action = ""
+            try:
+                nodes = list(getattr(decision.trace, "nodes", []) or [])
+                if nodes:
+                    last_action = getattr(nodes[-1], "action", "") or ""
+            except Exception:  # noqa: BLE001
+                last_action = ""
+            if last_action == "contract_only":
+                decision.set_final(final_action="contract_only", selected_draft_id="")
+                # PersistGuard: no official script for contract_only
+                tf = self.output_dir / "test_feature.py"
+                if tf.exists():
+                    if getattr(config, "spec_parser_persist_rejected_scripts", True):
+                        rej = self.output_dir / "artifacts" / "rejected"
+                        rej.mkdir(parents=True, exist_ok=True)
+                        (rej / "final_rejected_test_feature.py").write_text(
+                            tf.read_text(encoding="utf-8", errors="replace"),
+                            encoding="utf-8",
+                        )
+                    tf.unlink(missing_ok=True)
+                spec.repro_script = None
+            else:
+                decision.set_final(final_action="no_script", selected_draft_id="")
+                if spec.repro_script is not None:
+                    spec.repro_script = spec.repro_script.with_calibration(
+                        passed=False,
+                        round_no=spec.repro_script.calibration_round or 0,
+                        exit_code=spec.repro_script.exit_code,
+                        stderr_excerpt=spec.repro_script.stderr_excerpt or "",
+                    )
         elif best_of and candidates:
             best = pick_best_draft(candidates)
             score_policy = (

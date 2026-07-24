@@ -62,18 +62,23 @@ def write_artifact_consistency_report(
             "persist",
             "s1_accept",
         )
-    if final_action == "no_script" and disk:
-        quarantine_or_delete_scripts(output_dir, reason="no_script")
+    if final_action in {"no_script", "contract_only"} and disk:
+        quarantine_or_delete_scripts(output_dir, reason=final_action)
         disk = disk_script_present(output_dir)
         accepted_script_present = False
+    executable = final_action in ("calib_pass", "persist", "s1_accept")
+    if accepted_script_present is None:
+        accepted_script_present = disk and executable
     report = {
         "final_action": final_action,
         "selected_draft_id": selected_draft_id,
         "disk_script_present": disk,
         "accepted_script_present": bool(accepted_script_present),
+        "official_script_path": "test_feature.py" if (disk and executable) else "",
         "artifact_consistent": (
-            (final_action == "no_script" and not disk)
-            or (final_action != "no_script" and disk == bool(accepted_script_present))
+            (final_action in {"no_script", "contract_only"} and not disk)
+            or (executable and disk == bool(accepted_script_present))
+            or (not executable and not disk)
         ),
     }
     (output_dir / "artifact_consistency.json").write_text(

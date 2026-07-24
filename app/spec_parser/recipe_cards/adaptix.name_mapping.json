@@ -5,5 +5,16 @@
   "forbidden_patterns": ["Retort(name_mapping=", "name_mapping(...)("],
   "hint": "Use Retort(recipe=[name_mapping(...)]).load / get_loader",
   "call_graph_template": ["Retort", "name_mapping", "load"],
-  "blocking": true
+  "blocking": true,
+  "emit_template": {
+    "imports": ["from adaptix import Retort, name_mapping"],
+    "arrange": [
+      "class __SLOT_model__(object):\n    pass"
+    ],
+    "call_expr": "Retort(recipe=[name_mapping(__SLOT_name_mapping_args__)]).load(__SLOT_data__, __SLOT_model__)",
+    "slots_from_inputs": ["name_mapping_args", "data", "model"],
+    "slot_aliases": {"payload": "data", "tp": "model"},
+    "result_name": "result",
+    "needs_await": false
+  }
 }

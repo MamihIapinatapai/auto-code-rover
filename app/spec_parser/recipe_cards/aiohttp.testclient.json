@@ -5,5 +5,20 @@
   "forbidden_patterns": ["Handler()"],
   "hint": "Use aiohttp TestClient with real path entrypoint",
   "call_graph_template": ["TestClient"],
-  "blocking": true
+  "blocking": true,
+  "emit_template": {
+    "imports": [
+      "from aiohttp import web",
+      "from aiohttp.test_utils import TestClient, TestServer"
+    ],
+    "arrange": [
+      "async def __SLOT_handler__(request):\n    return web.Response(status=__SLOT_status__, text=__SLOT_body__)\n",
+      "app = web.Application()\napp.router.add_route(__SLOT_method__, __SLOT_path__, __SLOT_handler__)\n"
+    ],
+    "call_expr": "TestClient(TestServer(app))",
+    "slots_from_inputs": ["handler", "status", "body", "method", "path"],
+    "slot_aliases": {"entrypoint": "path", "url": "path"},
+    "result_name": "resp",
+    "needs_await": false
+  }
 }
