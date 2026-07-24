@@ -172,9 +172,10 @@ def check_failure_semantics(
     any_product = False
 
     for ac_id, section in chunks:
-        # Preamble-only chunks (imports / module docstring before first AC-*)
-        # must not trigger EG-02 — only executable AC bodies are gated.
-        if not re.search(r"\bdef\s+test_", section) and len(chunks) > 1:
+        # Skip module preamble only (imports/docstring before first AC-* marker).
+        # Free-path scripts use def main() + indented AC bodies (no def test_),
+        # so do NOT require def test_ here.
+        if len(chunks) > 1 and not re.search(r"AC-[A-Za-z0-9_]+", section):
             continue
         try:
             sec_tree = ast.parse(section)

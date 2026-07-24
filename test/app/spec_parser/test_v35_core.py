@@ -39,6 +39,25 @@ def test_ac_M1():
     assert r.ok, r.blocking
 
 
+def test_eg02_allows_main_harness_ac_sections():
+    """Free-path scripts use def main() + indented AC bodies — must not EG-02."""
+    script = '''
+"""doc"""
+from aiomonitor import Monitor, start_monitor
+
+def main():
+    # --- AC-001: start monitor ---
+    with start_monitor(host="127.0.0.1", port=0) as m:
+        assert isinstance(m, Monitor)
+    # --- AC-002: snapshot API ---
+    with start_monitor(host="127.0.0.1", port=0) as m:
+        snap = m.take_snapshot()
+        assert snap is not None
+'''
+    r = check_failure_semantics(script)
+    assert r.ok, r.blocking
+
+
 def test_render_blocked_without_fuel():
     contract = {
         "items": [
