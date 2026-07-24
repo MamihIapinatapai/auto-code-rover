@@ -1,0 +1,10 @@
+# Minimal host deps to run app/main.py deepswe outside Docker (subset of requirements.txt)
+-r requirements-pilot-minimal.txt
+natsort==8.4.0
+pylint==3.2.3
+astroid==3.2.3
+dill==0.3.8
+isort==5.13.2
+mccabe==0.7.0
+platformdirs==4.2.2
+tomlkit==0.12.5

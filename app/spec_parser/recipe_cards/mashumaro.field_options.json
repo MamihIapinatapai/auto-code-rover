@@ -1,0 +1,9 @@
+{
+  "id": "mashumaro.field_options",
+  "layer": "lib",
+  "required_patterns": ["field(metadata=", "field_options"],
+  "forbidden_patterns": ["Model(field_options="],
+  "hint": "Use dataclasses.field(metadata=field_options(...))",
+  "call_graph_template": ["field", "field_options"],
+  "blocking": true
+}

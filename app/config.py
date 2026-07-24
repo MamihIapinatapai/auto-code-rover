@@ -88,9 +88,75 @@ spec_parser_search_context_max_snippet_chars: int = 400
 spec_parser_version: str = "2.2.0"
 spec_parser_use_repair_draft: bool = True
 
-# v3.1 script generation prompts (M17+); L10+ quality rules always on in linter.
+# v3.1+ script generation prompts (M17+); L10+ quality rules always on in linter.
 # Prefer True when running DeepSWE / v3 calib so generators use script_prompts_v3.
 spec_parser_use_v3_prompts: bool = True
+
+# v3.2 script reviewer LLM (translate lint/gate + Issue gaps → generator feedback).
+# When False, calibration loop falls back to format_feedback_v3 (3.1 behaviour).
+spec_parser_enable_script_review: bool = True
+spec_parser_script_review_on_preflight: bool = True
+spec_parser_script_review_on_gate: bool = True
+
+# v3.3 evidence chain + decision trace + draft best-of
+spec_parser_enable_evidence_chain: bool = True
+spec_parser_enable_decision_trace: bool = True
+spec_parser_enable_draft_best_of: bool = True
+spec_parser_early_stop_stub_rounds: int = 2
+spec_parser_env_transitive_modules: list[str] = [
+    "yaml",
+    "typing_extensions",
+    "packaging",
+    "attrs",
+    "idna",
+    "certifi",
+    "urllib3",
+    "charset_normalizer",
+    "tomli",
+    "tomllib",
+]
+spec_parser_coverage_post_pass_review: bool = False
+spec_parser_wrong_layer_warnings: bool = True
+
+# v3.3.1 ScriptAnchor (Tier1 static + Tier2 inspect)
+spec_parser_enable_script_anchor: bool = False
+spec_parser_enable_script_anchor_tier2: bool = False
+spec_parser_anchor_max_symbols: int = 12
+spec_parser_anchor_max_entrypoints: int = 8
+spec_parser_anchor_prompt_max_chars: int = 3500
+spec_parser_anchor_layer_gap_blocks_persist: bool = False
+spec_parser_anchor_scan_decorators: bool = True
+spec_parser_anchor_inspect_timeout_sec: int = 10
+spec_parser_anchor_pre_gen_inspect: bool = False
+spec_parser_anchor_score_signature_weight: float = 0.0  # B5: default off
+
+# v3.4.0 Contract-First / S1 / Gate / ART / Recipe / DSL (FINAL §6)
+spec_parser_enable_s1_skeleton: bool = True
+spec_parser_enable_behavior_contract: bool = True
+spec_parser_contract_schema_version: str = "bc-1"
+spec_parser_contract_max_expect_retries: int = 2
+spec_parser_force_contract_path: bool = False
+spec_parser_enable_contract_llm_review: bool = False
+spec_parser_contract_llm_review_mode: str = "high_risk_only"
+spec_parser_contract_review_model: str | None = None
+spec_parser_contract_llm_review_task_allowlist: list[str] = []
+spec_parser_enable_script_contract_align: bool = True
+spec_parser_enable_script_contract_llm: bool = False
+spec_parser_script_contract_llm_mode: str = "high_risk_only"
+spec_parser_scc_share_expect_retries: bool = True
+spec_parser_enable_recipe_cards: bool = True
+spec_parser_enable_usage_recipe_mine: bool = False
+spec_parser_enable_dual_state_lite: bool = True
+spec_parser_enable_gate_triage: bool = True
+spec_parser_enable_artifact_store: bool = True
+spec_parser_contract_path_legacy_review: str = "skip"  # skip | warn_only
+spec_parser_s1_on_stub: bool = True
+spec_parser_forbid_no_script_if_s1_ok: bool = True
+spec_parser_delete_script_on_no_script: bool = True
+spec_parser_s1_require_entrypoint_for_cli_web: bool = True
+spec_parser_recipe_cards_path: str = "app/spec_parser/recipe_cards"
+spec_parser_draft_score_version: str = "v34"
+spec_parser_feature_module_name_hints: list[str] = []
 
 # timeout for test cmd execution, currently set to 5 min
 test_exec_timeout: int = 300

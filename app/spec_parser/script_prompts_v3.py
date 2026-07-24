@@ -40,6 +40,8 @@ Rules:
     and bare `except Exception: pass` (or any except that only passes).
 13. FORBIDDEN imports unless Issue explicitly requires them: pytest, unittest as hard deps,
     unrelated stacks (e.g. sympy) when not part of the repo under test.
+14. (v3.3) Follow issue_coverage_chain missing/partial after lint/gate fixes.
+15. (v3.3) Do not use NotImplementedError-only AC bodies without a product API probe.
 """
 
 FEATURE_SCRIPT_SYSTEM_PROMPT = """You are an expert test engineer practicing reverse test-driven development (reverse-TDD)
@@ -78,6 +80,20 @@ Rules:
 14. Prefer catching feature AttributeError/ImportError and re-raising
     AssertionError("AC-XXX FAIL: NOT_IMPLEMENTED") — do not leave ModuleNotFoundError
     for pytest/sympy/etc. as the script's only failure mode.
+15. (v3.3) Follow issue_coverage_chain missing/partial items after lint/gate fixes.
+16. (v3.3) WRONG_LAYER forbidden: if Issue requires CLI/Web, do not substitute
+    lower-level API-only tests for CLI/Web acceptance.
+17. (v3.3) ImportError from missing transitive deps (yaml, typing_extensions, …)
+    must NOT be wrapped as NOT_IMPLEMENTED; avoid importing optional deps not in Issue.
+18. (v3.3) Do not use NotImplementedError / NOT_IMPLEMENTED as the only AC body
+    without a prior product API probe call (L14-EMPTY-FAIL).
+19. (v3.3.1) When ScriptAnchor lists a symbol with conf>=0.5 and not ambiguous,
+    do not invent parameter names/order that contradict signature_runtime (preferred)
+    or signature_ast. Issue expected values still override Anchor.
+20. (v3.3.1) When ScriptAnchor lists console_script/click entrypoints and Issue
+    requires CLI, exercise those entrypoints (CliRunner/subprocess).
+21. (v3.3.1) If a needed symbol is low-confidence/ambiguous/missing, prefer Issue
+    code blocks or NOT_IMPLEMENTED after a real probe — do not fabricate APIs.
 """
 
 SCRIPT_USER_V3_TEMPLATE = """## Task Type
@@ -102,6 +118,8 @@ SCRIPT_USER_V3_TEMPLATE = """## Task Type
 ## Observable Acceptance Criteria
 {ac_table}
 
+{script_anchor_block}
+
 ## Fix Scope
 {fix_scope_json}
 
@@ -120,13 +138,17 @@ SCRIPT_USER_V3_TEMPLATE = """## Task Type
 ## Repository Context
 repo={repo_name}, framework={test_framework}
 
-## Sample test excerpt (style reference)
+## Sample test excerpt (style reference only — NOT acceptance oracle; do not copy hidden tests)
 ```
 {sample_test_excerpt}
 ```
 
 ## Task
 Write {script_filename} AC test body only. Round {round_no}.
+If feedback includes Script Reviewer / ordered_actions: apply blocking_fixes first
+(lint/Gate win on conflict), then gate_fixes, then issue_coverage_chain missing/partial,
+then other Issue gaps. Do not invent APIs absent from Issue.
+If feedback includes BASE_SCRIPT_TO_IMPROVE: prefer improving that draft over rewriting from scratch.
 {feedback_section}
 """
 
@@ -147,6 +169,7 @@ Fix (BUG_FIX): fix unrelated ImportError unless the issue is about imports.
 Fix (FEATURE): distinguish NOT_IMPLEMENTED (missing API) from REGRESSION_FAIL (broken existing behavior).
 Fix (FEATURE): ImportError must not appear in stderr — only AssertionError with NOT_IMPLEMENTED.
 Fix (grounding): do not assert on symbols not in Issue text; prefer Issue over AC.observable when they conflict.
+Fix (reviewer): if Script Reviewer feedback is present, follow ordered_actions / blocking_fixes but never reintroduce lint violations.
 """
 
 
@@ -201,6 +224,7 @@ def format_script_user_v3(
     round_no: int,
     *,
     issue_text_max_chars: int = 8000,
+    script_anchor_block: str = "",
 ) -> str:
     excerpt = issue_text[:issue_text_max_chars]
     if len(issue_text) > issue_text_max_chars:
@@ -216,6 +240,7 @@ def format_script_user_v3(
         issue_text_excerpt=excerpt,
         repair_draft_json=_build_repair_draft_json(spec),
         ac_table=_format_ac_table(spec),
+        script_anchor_block=script_anchor_block or "",
         fix_scope_json=json.dumps(spec.fix_scope.model_dump(), indent=2),
         negative_constraints_json=json.dumps(
             [nc.model_dump() for nc in spec.negative_constraints], indent=2

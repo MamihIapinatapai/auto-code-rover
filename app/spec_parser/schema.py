@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -170,6 +170,168 @@ class ScriptLintReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     ac_section_map: dict[str, list[int]] = Field(default_factory=dict)
     missing_ac_ids: list[str] = Field(default_factory=list)
+
+
+class ReviewBlockingFix(BaseModel):
+    rule: str = ""
+    bad_pattern: str = ""
+    legal_rewrite: str = ""
+    why_legal: str = ""
+
+
+class ReviewIssueGap(BaseModel):
+    kind: str = ""  # missing_must | weak_assert | over_spec_risk
+    detail: str = ""
+    legal_rewrite: str = ""
+    superseded_by_blocking: bool = False
+
+
+class ReviewDiagnosis(BaseModel):
+    failure_class: str = "none"  # lint|gate_feature|gate_env|mixed|none
+    summary: str = ""
+
+
+class ReviewGateFix(BaseModel):
+    kind: str = "other"  # intentional_ac_fail|not_implemented|env_not_script|other
+    evidence: str = ""
+    legal_rewrite: str = ""
+    why: str = ""
+
+
+class IssueCoverageItem(BaseModel):
+    """Single Issue Must/Should ↔ AC binding (v3.3 evidence chain)."""
+
+    issue_item_id: str = ""
+    issue_quote: str = ""
+    ac_id: str | None = None
+    expected_layer: str = "any"  # api|cli|web|http|library|any
+    actual_layer: str = "unknown"
+    product_calls: list[str] = Field(default_factory=list)
+    assertion_strength: str = "unknown"
+    evidence_type: str = "unknown"
+    verdict: str = "unknown"  # covered|partial|missing|over_spec|deferred
+    legal_rewrite: str = ""
+    issue_quote_span_hint: str = ""
+
+
+class IssueCoverageChain(BaseModel):
+    round_no: int = 1
+    stage: Literal["preflight", "gate", "post_pass"] = "preflight"
+    items: list[IssueCoverageItem] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict)
+    source: str = "reviewer_llm"
+
+
+class DecisionNode(BaseModel):
+    node_id: str = ""
+    round_no: int = 1
+    timestamp: str = ""
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    options: list[str] = Field(default_factory=list)
+    evaluation: dict[str, Any] = Field(default_factory=dict)
+    policy_id: str = ""
+    decision: str = ""
+    reason: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+    action: str = ""
+    outcome: str = ""
+
+
+class ScriptDecisionTrace(BaseModel):
+    task_id: str = ""
+    parser_version: str = "3.3.0"
+    nodes: list[DecisionNode] = Field(default_factory=list)
+    final_action: str = ""
+    selected_draft_id: str = ""
+
+
+class DraftMetrics(BaseModel):
+    draft_id: str = ""
+    round_no: int = 1
+    script_content: str = ""
+    lint_violations: int = 0
+    blocking_rules: list[str] = Field(default_factory=list)
+    behavioral_ac_count: int = 0
+    existence_only_ac_count: int = 0
+    empty_fail_ac_count: int = 0
+    calibration_passed: bool = False
+    coverage_missing_must: int = 0
+    coverage_wrong_layer: int = 0
+    anchor_signature_violations: int = 0
+    anchor_layer_gap_count: int = 0
+    # v3.4 score terms
+    concrete_expect_ac_count: int = 0
+    recipe_compliance_bonus: int = 0
+    scc_m_pass: bool = False
+    contract_path_s1: bool = False
+    feature_calib_ok: bool = False
+    false_fail_risk_hits: int = 0
+    harness_error: int = 0
+    score: float = 0.0
+
+
+class AnchorSymbol(BaseModel):
+    """One Issue/AC-named symbol grounded in the repo (non-test)."""
+
+    name: str
+    kind: str = "unknown"
+    module_hint: str = ""
+    rel_path: str = ""
+    lineno: int | None = None
+    signature_ast: str = ""
+    is_async: bool = False
+    docstring_head: str = ""
+    signature_runtime: str = ""
+    docstring_runtime: str = ""
+    public_export: bool | None = None
+    source: str = "issue"
+    confidence: float = 0.0
+    ambiguous: bool = False
+    alternate_paths: list[str] = Field(default_factory=list)
+
+
+class AnchorEntrypoint(BaseModel):
+    """CLI / console / coarse HTTP hints (not a full router map)."""
+
+    kind: str
+    name: str = ""
+    target: str = ""
+    rel_path: str = ""
+    evidence: str = ""
+    confidence: float = 0.0
+
+
+class ScriptAnchor(BaseModel):
+    task_id: str = ""
+    parser_version: str = "3.3.1"
+    package_roots: list[str] = Field(default_factory=list)
+    symbols: list[AnchorSymbol] = Field(default_factory=list)
+    entrypoints: list[AnchorEntrypoint] = Field(default_factory=list)
+    layer_hints: dict[str, str] = Field(default_factory=dict)
+    missing_issue_symbols: list[str] = Field(default_factory=list)
+    build_errors: list[str] = Field(default_factory=list)
+    tier1_ok: bool = False
+    tier2_ok: bool = False
+    tier2_skipped_reason: str = ""
+
+
+
+class ScriptReviewReport(BaseModel):
+    """v3.2+ script-reviewer output (advisory; lint/Gate remain authoritative)."""
+
+    stage: Literal["preflight", "gate"] = "preflight"
+    round_no: int = 1
+    diagnosis: ReviewDiagnosis = Field(default_factory=ReviewDiagnosis)
+    blocking_fixes: list[ReviewBlockingFix] = Field(default_factory=list)
+    gate_fixes: list[ReviewGateFix] = Field(default_factory=list)
+    issue_alignment: list[ReviewIssueGap] = Field(default_factory=list)
+    deferred_issue_gaps: list[str] = Field(default_factory=list)
+    ordered_actions: list[str] = Field(default_factory=list)
+    issue_coverage_chain: list[IssueCoverageItem] = Field(default_factory=list)
+    decision_summary: dict[str, Any] = Field(default_factory=dict)
+    raw_response: str = ""
+    parse_ok: bool = True
+    sanitized: bool = False
 
 
 class RepoEnrichment(BaseModel):

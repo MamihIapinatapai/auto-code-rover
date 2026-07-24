@@ -1,0 +1,9 @@
+{
+  "id": "aiohttp.testclient",
+  "layer": "web",
+  "required_patterns": ["TestClient"],
+  "forbidden_patterns": ["Handler()"],
+  "hint": "Use aiohttp TestClient with real path entrypoint",
+  "call_graph_template": ["TestClient"],
+  "blocking": true
+}

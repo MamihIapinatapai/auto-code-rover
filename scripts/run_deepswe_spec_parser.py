@@ -133,6 +133,7 @@ def run_one_task(
         "parser_version": getattr(config, "spec_parser_version", V2_PARSER_VERSION),
         "repo_enrichment_enabled": bool(config.spec_parser_enable_repo_enrichment),
         "use_v3_prompts": bool(getattr(config, "spec_parser_use_v3_prompts", False)),
+        "script_review": bool(getattr(config, "spec_parser_enable_script_review", False)),
     }
 
     try:
@@ -204,15 +205,81 @@ def main() -> int:
     )
     parser.add_argument(
         "--spec-parser-version",
-        choices=[V2_PARSER_VERSION, V3_PARSER_VERSION],
+        choices=["2.2.0", "3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.3.1", "3.4.0"],
         default=None,
-        help="Pipeline version: 3.0.0 disables P2 static analysis by default.",
+        help="Pipeline version: 3.x disables P2; 3.3 chains; 3.3.1 ScriptAnchor; 3.4.0 Contract-First.",
     )
     parser.add_argument(
         "--use-v3-prompts",
         action="store_true",
         default=False,
         help="Use v3.0 dual script prompts (BUG_FIX/FEATURE) and scaffold wrapping.",
+    )
+    parser.add_argument(
+        "--enable-script-review",
+        action="store_true",
+        default=False,
+        help="Enable v3.2 script reviewer LLM on lint/gate failure.",
+    )
+    parser.add_argument(
+        "--no-script-review",
+        action="store_true",
+        default=False,
+        help="Disable v3.2 script reviewer (use rule-only feedback like 3.1).",
+    )
+    parser.add_argument(
+        "--no-evidence-chain",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 Issue↔AC evidence chain.",
+    )
+    parser.add_argument(
+        "--no-decision-trace",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 decision-trace persistence.",
+    )
+    parser.add_argument(
+        "--no-draft-best-of",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 draft best-of selection.",
+    )
+    parser.add_argument(
+        "--no-script-anchor",
+        action="store_true",
+        default=False,
+        help="Disable v3.3.1 ScriptAnchor.",
+    )
+    parser.add_argument(
+        "--no-script-anchor-tier2",
+        action="store_true",
+        default=False,
+        help="Disable v3.3.1 ScriptAnchor Tier2 inspect.",
+    )
+    parser.add_argument(
+        "--enable-contract-llm-review",
+        action="store_true",
+        default=False,
+        help="Enable v3.4 BehaviorContract LLM semantic review (after BC pass).",
+    )
+    parser.add_argument(
+        "--enable-script-contract-llm",
+        action="store_true",
+        default=False,
+        help="Enable v3.4 SCC-L script↔contract LLM review (after SCC-M).",
+    )
+    parser.add_argument(
+        "--contract-llm-review-mode",
+        choices=["off", "always", "high_risk_only"],
+        default=None,
+        help="Mode for contract LLM review (default high_risk_only when enabled).",
+    )
+    parser.add_argument(
+        "--script-contract-llm-mode",
+        choices=["off", "always", "high_risk_only"],
+        default=None,
+        help="Mode for SCC-L (default high_risk_only when enabled).",
     )
     parser.add_argument(
         "--no-repo-enrichment",
@@ -255,6 +322,40 @@ def main() -> int:
         config.spec_parser_use_v3_prompts = True
     if args.use_v3_prompts:
         config.spec_parser_use_v3_prompts = True
+    if args.enable_script_review:
+        config.spec_parser_enable_script_review = True
+    if args.no_script_review:
+        config.spec_parser_enable_script_review = False
+    if getattr(args, "no_evidence_chain", False):
+        config.spec_parser_enable_evidence_chain = False
+    if getattr(args, "no_decision_trace", False):
+        config.spec_parser_enable_decision_trace = False
+    if getattr(args, "no_draft_best_of", False):
+        config.spec_parser_enable_draft_best_of = False
+    if getattr(args, "no_script_anchor", False):
+        config.spec_parser_enable_script_anchor = False
+        config.spec_parser_enable_script_anchor_tier2 = False
+    if getattr(args, "no_script_anchor_tier2", False):
+        config.spec_parser_enable_script_anchor_tier2 = False
+    # v3.4 semantic LLM reviews — must apply AFTER apply_spec_parser_version
+    if getattr(args, "enable_contract_llm_review", False):
+        config.spec_parser_enable_contract_llm_review = True
+        config.spec_parser_contract_llm_review_mode = (
+            args.contract_llm_review_mode or "high_risk_only"
+        )
+    elif getattr(args, "contract_llm_review_mode", None):
+        config.spec_parser_contract_llm_review_mode = args.contract_llm_review_mode
+        if args.contract_llm_review_mode != "off":
+            config.spec_parser_enable_contract_llm_review = True
+    if getattr(args, "enable_script_contract_llm", False):
+        config.spec_parser_enable_script_contract_llm = True
+        config.spec_parser_script_contract_llm_mode = (
+            args.script_contract_llm_mode or "high_risk_only"
+        )
+    elif getattr(args, "script_contract_llm_mode", None):
+        config.spec_parser_script_contract_llm_mode = args.script_contract_llm_mode
+        if args.script_contract_llm_mode != "off":
+            config.spec_parser_enable_script_contract_llm = True
 
     config.enable_spec_parser = True
     config.enable_sympy_pipeline_v2 = False
@@ -279,6 +380,11 @@ def main() -> int:
         f"DeepSWE spec parser: {len(task_ids)} task(s), stop_after={stop_after}, "
         f"parser_version={config.spec_parser_version}, "
         f"v3_prompts={config.spec_parser_use_v3_prompts}, "
+        f"script_review={config.spec_parser_enable_script_review}, "
+        f"contract_llm_review={config.spec_parser_enable_contract_llm_review}"
+        f"/{getattr(config, 'spec_parser_contract_llm_review_mode', '')}, "
+        f"scc_l={config.spec_parser_enable_script_contract_llm}"
+        f"/{getattr(config, 'spec_parser_script_contract_llm_mode', '')}, "
         f"repo_enrichment={config.spec_parser_enable_repo_enrichment}"
     )
     print(f"Output: {output_root}")
@@ -289,6 +395,19 @@ def main() -> int:
         "stop_after": stop_after,
         "parser_version": config.spec_parser_version,
         "use_v3_prompts": bool(config.spec_parser_use_v3_prompts),
+        "script_review": bool(config.spec_parser_enable_script_review),
+        "contract_llm_review": bool(
+            getattr(config, "spec_parser_enable_contract_llm_review", False)
+        ),
+        "contract_llm_review_mode": getattr(
+            config, "spec_parser_contract_llm_review_mode", "off"
+        ),
+        "script_contract_llm": bool(
+            getattr(config, "spec_parser_enable_script_contract_llm", False)
+        ),
+        "script_contract_llm_mode": getattr(
+            config, "spec_parser_script_contract_llm_mode", "off"
+        ),
         "repo_enrichment_enabled": bool(config.spec_parser_enable_repo_enrichment),
         "model": model[0] if model else "",
         "started_at": datetime.now().isoformat(),

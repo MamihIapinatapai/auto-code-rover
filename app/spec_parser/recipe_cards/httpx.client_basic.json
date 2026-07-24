@@ -1,0 +1,9 @@
+{
+  "id": "httpx.client_basic",
+  "layer": "lib",
+  "required_patterns": ["httpx."],
+  "forbidden_patterns": ["hasattr(aiter"],
+  "hint": "Use httpx client call patterns, not existence-only aiter checks",
+  "call_graph_template": ["httpx", "Client"],
+  "blocking": false
+}

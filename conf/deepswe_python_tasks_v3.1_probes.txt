@@ -1,0 +1,21 @@
+# ver3.1 probe set — 12 defect probes + 3 gold standards
+# See document/model1/calib_v3/v3_script_quality_optimization_plan.md §P0-4
+
+# --- Gold (expect intentional fail / strong scripts) ---
+httpx-multipart-response-parsing
+httpx-streaming-json-iteration
+cattrs-partial-structuring-recovery
+
+# --- Probes ---
+aiomonitor-task-snapshots-diff
+sqlite-utils-safe-import-checkpoints
+python-statemachine-state-data-scoping
+gql-incremental-graphql-delivery
+igel-persist-feature-schema
+dateutil-rfc5545-timezone-interop
+sqlfmt-create-table-ddl-formatting
+psd-tools-blend-range-api
+adaptix-name-mapping-aliases
+bandit-structured-nosec-directives
+mashumaro-flattened-dataclass-fields
+narwhals-rolling-window-suite

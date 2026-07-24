@@ -1,0 +1,2 @@
+# v3.4 smoke — stub-prone task for contract path
+igel-persist-feature-schema

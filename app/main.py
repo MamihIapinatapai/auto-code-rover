@@ -148,6 +148,21 @@ def main():
         "yes",
     ):
         config.spec_parser_use_v3_prompts = True
+    if getattr(args, "enable_script_review", False):
+        config.spec_parser_enable_script_review = True
+    if getattr(args, "no_script_review", False):
+        config.spec_parser_enable_script_review = False
+    if getattr(args, "no_evidence_chain", False):
+        config.spec_parser_enable_evidence_chain = False
+    if getattr(args, "no_decision_trace", False):
+        config.spec_parser_enable_decision_trace = False
+    if getattr(args, "no_draft_best_of", False):
+        config.spec_parser_enable_draft_best_of = False
+    if getattr(args, "no_script_anchor", False):
+        config.spec_parser_enable_script_anchor = False
+        config.spec_parser_enable_script_anchor_tier2 = False
+    if getattr(args, "no_script_anchor_tier2", False):
+        config.spec_parser_enable_script_anchor_tier2 = False
     if config.enable_spec_parser:
         configure_repo_enrichment(
             stop_after="full",
@@ -468,9 +483,10 @@ def add_task_related_args(parser: ArgumentParser) -> None:
     )
     parser.add_argument(
         "--spec-parser-version",
-        choices=["2.2.0", "3.0.0"],
+        choices=["2.2.0", "3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.3.1"],
         default=None,
-        help="Spec parser pipeline version (3.0.0 disables P2 by default).",
+        help="Spec parser pipeline version (3.x disables P2 by default; "
+        "3.2 script review; 3.3 evidence/decision chains; 3.3.1 ScriptAnchor).",
     )
     parser.add_argument(
         "--no-repo-enrichment",
@@ -487,6 +503,48 @@ def add_task_related_args(parser: ArgumentParser) -> None:
         action="store_true",
         default=False,
         help="Use v3.0 dual script prompts in spec parser.",
+    )
+    parser.add_argument(
+        "--enable-script-review",
+        action="store_true",
+        default=False,
+        help="Enable v3.2 script reviewer LLM.",
+    )
+    parser.add_argument(
+        "--no-script-review",
+        action="store_true",
+        default=False,
+        help="Disable v3.2 script reviewer.",
+    )
+    parser.add_argument(
+        "--no-evidence-chain",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 Issue↔AC evidence chain.",
+    )
+    parser.add_argument(
+        "--no-decision-trace",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 decision-trace persistence.",
+    )
+    parser.add_argument(
+        "--no-draft-best-of",
+        action="store_true",
+        default=False,
+        help="Disable v3.3 draft best-of selection.",
+    )
+    parser.add_argument(
+        "--no-script-anchor",
+        action="store_true",
+        default=False,
+        help="Disable v3.3.1 ScriptAnchor (Tier1+Tier2).",
+    )
+    parser.add_argument(
+        "--no-script-anchor-tier2",
+        action="store_true",
+        default=False,
+        help="Disable v3.3.1 ScriptAnchor Tier2 inspect only.",
     )
     parser.add_argument(
         "--num-processes",

@@ -370,6 +370,7 @@ tail -f outputs/deepswe_docker_run.log
 | `scripts/run_deepswe_spec_parser.py` | 本指南模式 A |
 | `scripts/run_deepswe.py` / `run_deepswe_docker.sh` | 本指南模式 B |
 | `document/model1/spec_parser_dev_plan.md` 等 | spec_parser 设计细节 |
+| `document/model1/spec_parser_ver3.2_design.md` | Spec Parser **ver3.2**（审视 LLM 流水线）技术设计 |
 
 ---
 

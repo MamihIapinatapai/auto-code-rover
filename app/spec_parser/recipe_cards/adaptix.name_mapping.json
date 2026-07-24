@@ -1,0 +1,9 @@
+{
+  "id": "adaptix.name_mapping",
+  "layer": "lib",
+  "required_patterns": ["Retort(recipe=[", "name_mapping("],
+  "forbidden_patterns": ["Retort(name_mapping=", "name_mapping(...)("],
+  "hint": "Use Retort(recipe=[name_mapping(...)]).load / get_loader",
+  "call_graph_template": ["Retort", "name_mapping", "load"],
+  "blocking": true
+}

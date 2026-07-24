@@ -39,6 +39,7 @@ class ScriptGenerator:
         feedback: str | None = None,
         round_no: int = 1,
         use_llm: bool = True,
+        script_anchor_block: str = "",
     ) -> tuple[ReproScriptArtifact, MessageThread]:
         filename = (
             "reproduce_issue.py"
@@ -59,6 +60,7 @@ class ScriptGenerator:
                         filename,
                         feedback,
                         round_no,
+                        script_anchor_block=script_anchor_block,
                     )
                 )
             else:
