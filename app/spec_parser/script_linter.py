@@ -77,7 +77,7 @@ def preflight(
     if _has_empty_fail_ac(script, section_map):
         blocking.append("L14-EMPTY-FAIL")
 
-    if getattr(config, "spec_parser_enable_failure_semantics_check", False):
+    if getattr(config, "spec_parser_enable_failure_semantics_check", True):
         from app.spec_parser.failure_semantics import check_failure_semantics
 
         eg = check_failure_semantics(script)

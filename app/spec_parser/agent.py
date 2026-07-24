@@ -547,7 +547,7 @@ class SpecParsingAgent:
                                 )
                                 early_stopped = False
                                 break
-                            # EG failed or no accept → do not keep fake S1
+                            # EG failed or no accept → free_fallback once, else contract_only
                             if not eg_ok:
                                 tf = self.output_dir / "test_feature.py"
                                 if tf.exists() and getattr(
@@ -561,6 +561,49 @@ class SpecParsingAgent:
                                         script_content, encoding="utf-8"
                                     )
                                     tf.unlink(missing_ok=True)
+                                if (
+                                    getattr(
+                                        config,
+                                        "spec_parser_free_fallback_on_contract_fail",
+                                        True,
+                                    )
+                                    and not free_fallback_used
+                                ):
+                                    free_fallback_used = True
+                                    decision.record(
+                                        node_id="D_free_fallback",
+                                        round_no=rnd,
+                                        options=["free_fallback", "contract_only"],
+                                        decision="free_fallback",
+                                        reason="eg_reject_after_contract_render",
+                                        policy_id="free_fallback_v35",
+                                        action="free_fallback_done",
+                                    )
+                                    usage_hint = ""
+                                    usp = self.output_dir / "usage_snippets.json"
+                                    if usp.exists():
+                                        try:
+                                            from app.spec_parser.usage_miner import (
+                                                format_usage_for_prompt,
+                                            )
+
+                                            usage_hint = format_usage_for_prompt(
+                                                json.loads(
+                                                    usp.read_text(encoding="utf-8")
+                                                )
+                                            )
+                                        except Exception:  # noqa: BLE001
+                                            usage_hint = usp.read_text(
+                                                encoding="utf-8"
+                                            )[:2000]
+                                    feedback = (
+                                        "Contract-path script failed Executableity Gate. "
+                                        "Generate a free-path script with real product Calls "
+                                        "(no None # invoke / NOT_IMPLEMENTED stubs).\n"
+                                        f"{usage_hint}"
+                                    )
+                                    early_stopped = False
+                                    continue
                                 decision.record(
                                     node_id="D_pick_draft",
                                     round_no=rnd,
@@ -585,10 +628,42 @@ class SpecParsingAgent:
                         allow_co = getattr(
                             config, "spec_parser_allow_contract_only", True
                         ) and bool((cp.get("contract") or {}).get("items"))
-                        if allow_co and (
-                            cp.get("render_blocked")
-                            or str(reason).startswith("render_blocked")
+                        render_blocked = cp.get("render_blocked") or str(
+                            reason
+                        ).startswith("render_blocked")
+                        if (
+                            render_blocked
+                            and getattr(
+                                config,
+                                "spec_parser_free_fallback_on_contract_fail",
+                                True,
+                            )
+                            and not free_fallback_used
                         ):
+                            free_fallback_used = True
+                            decision.record(
+                                node_id="D_free_fallback",
+                                round_no=rnd,
+                                options=["free_fallback", "contract_only"],
+                                decision="free_fallback",
+                                reason=reason,
+                                policy_id="free_fallback_v35",
+                                action="free_fallback_done",
+                            )
+                            usage_hint = ""
+                            usp = self.output_dir / "usage_snippets.json"
+                            if usp.exists():
+                                try:
+                                    usage_hint = usp.read_text(encoding="utf-8")[:2000]
+                                except OSError:
+                                    pass
+                            feedback = (
+                                "Contract render blocked; try a free-path script with "
+                                f"real product Calls.\n{usage_hint}"
+                            )
+                            early_stopped = False
+                            continue
+                        if allow_co and render_blocked:
                             decision.record(
                                 node_id="D_early_stop",
                                 round_no=rnd,
@@ -896,6 +971,21 @@ class SpecParsingAgent:
                     if best.calibration_passed
                     else ("s1_accept" if best.contract_path_s1 else "persist")
                 )
+                # v3.5: never s1_accept a script that fails EG
+                if action == "s1_accept" and getattr(
+                    config, "spec_parser_s1_require_exec_gate", True
+                ):
+                    from app.spec_parser.failure_semantics import (
+                        check_failure_semantics,
+                    )
+
+                    if not check_failure_semantics(best.script_content or "").ok:
+                        if getattr(config, "spec_parser_allow_contract_only", True) and (
+                            self.output_dir / "behavior_contract.json"
+                        ).exists():
+                            action = "contract_only"
+                        else:
+                            action = "no_script"
                 decision.record(
                     node_id="D_pick_draft",
                     round_no=best.round_no,
@@ -906,40 +996,74 @@ class SpecParsingAgent:
                     evaluation={"scores": {c.draft_id: c.score for c in candidates}},
                     action=action,
                 )
-                decision.set_final(
-                    final_action=action
-                    if action in ("calib_pass", "s1_accept")
-                    else "calib_pass",
-                    selected_draft_id=best.draft_id,
-                )
-                # Restore best script content into repro_script if different
-                if (
-                    spec.repro_script is None
-                    or spec.repro_script.content != best.script_content
-                ):
-                    from app.spec_parser.schema import ReproScriptArtifact
+                if action == "contract_only":
+                    decision.set_final(
+                        final_action="contract_only", selected_draft_id=""
+                    )
+                    tf = self.output_dir / "test_feature.py"
+                    if tf.exists():
+                        tf.unlink(missing_ok=True)
+                    spec.repro_script = None
+                elif action == "no_script":
+                    decision.set_final(final_action="no_script", selected_draft_id="")
+                else:
+                    decision.set_final(
+                        final_action=action
+                        if action in ("calib_pass", "s1_accept", "persist")
+                        else "calib_pass",
+                        selected_draft_id=best.draft_id,
+                    )
+                    # Restore best script content into repro_script if different
+                    if (
+                        spec.repro_script is None
+                        or spec.repro_script.content != best.script_content
+                    ):
+                        from app.spec_parser.schema import ReproScriptArtifact
 
-                    fname = (
-                        spec.repro_script.filename
-                        if spec.repro_script is not None
-                        else "test_feature.py"
-                    )
-                    spec.repro_script = ReproScriptArtifact(
-                        filename=fname,
-                        content=best.script_content,
-                        calibration_passed=bool(best.calibration_passed),
-                        calibration_round=best.round_no,
-                    )
+                        fname = (
+                            spec.repro_script.filename
+                            if spec.repro_script is not None
+                            else "test_feature.py"
+                        )
+                        spec.repro_script = ReproScriptArtifact(
+                            filename=fname,
+                            content=best.script_content,
+                            calibration_passed=bool(best.calibration_passed),
+                            calibration_round=best.round_no,
+                        )
             else:
-                # Keep contract S1 script if present even without calib
+                # s1_accept only when EG passes (no stub fake script)
+                eg_ok = False
+                if spec.repro_script and getattr(
+                    config, "spec_parser_s1_require_exec_gate", True
+                ):
+                    from app.spec_parser.failure_semantics import (
+                        check_failure_semantics,
+                    )
+
+                    eg_ok = check_failure_semantics(spec.repro_script.content).ok
+                elif spec.repro_script:
+                    eg_ok = True
                 if (
-                    spec.repro_script
+                    eg_ok
+                    and spec.repro_script
                     and getattr(config, "spec_parser_forbid_no_script_if_s1_ok", True)
                     and (self.output_dir / "behavior_contract.json").exists()
                 ):
                     decision.set_final(
                         final_action="s1_accept", selected_draft_id="contract"
                     )
+                elif (
+                    getattr(config, "spec_parser_allow_contract_only", True)
+                    and (self.output_dir / "behavior_contract.json").exists()
+                ):
+                    decision.set_final(
+                        final_action="contract_only", selected_draft_id=""
+                    )
+                    tf = self.output_dir / "test_feature.py"
+                    if tf.exists():
+                        tf.unlink(missing_ok=True)
+                    spec.repro_script = None
                 else:
                     decision.set_final(final_action="no_script", selected_draft_id="")
         else:
@@ -948,16 +1072,40 @@ class SpecParsingAgent:
                     final_action="calib_pass",
                     selected_draft_id=f"r{spec.repro_script.calibration_round}",
                 )
-            elif (
-                spec.repro_script
-                and (self.output_dir / "behavior_contract.json").exists()
-                and getattr(config, "spec_parser_forbid_no_script_if_s1_ok", True)
-            ):
-                decision.set_final(
-                    final_action="s1_accept", selected_draft_id="contract"
-                )
             else:
-                decision.set_final(final_action="no_script", selected_draft_id="")
+                eg_ok = False
+                if spec.repro_script and getattr(
+                    config, "spec_parser_s1_require_exec_gate", True
+                ):
+                    from app.spec_parser.failure_semantics import (
+                        check_failure_semantics,
+                    )
+
+                    eg_ok = check_failure_semantics(spec.repro_script.content).ok
+                elif spec.repro_script:
+                    eg_ok = True
+                if (
+                    eg_ok
+                    and spec.repro_script
+                    and (self.output_dir / "behavior_contract.json").exists()
+                    and getattr(config, "spec_parser_forbid_no_script_if_s1_ok", True)
+                ):
+                    decision.set_final(
+                        final_action="s1_accept", selected_draft_id="contract"
+                    )
+                elif (
+                    getattr(config, "spec_parser_allow_contract_only", True)
+                    and (self.output_dir / "behavior_contract.json").exists()
+                ):
+                    decision.set_final(
+                        final_action="contract_only", selected_draft_id=""
+                    )
+                    tf = self.output_dir / "test_feature.py"
+                    if tf.exists():
+                        tf.unlink(missing_ok=True)
+                    spec.repro_script = None
+                else:
+                    decision.set_final(final_action="no_script", selected_draft_id="")
 
         # ART consistency
         try:
